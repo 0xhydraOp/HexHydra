@@ -15,7 +15,12 @@ internal fun XposedEntry.hookBuildFields(classLoader: ClassLoader) {
             setStaticSafe(buildClass, "PRODUCT", "product")
             setStaticSafe(buildClass, "BOARD", "board")
             setStaticSafe(buildClass, "HARDWARE", "hardware_id")
-            setStaticSafe(buildClass, "SERIAL", "hardware_id")
+            // Build.SERIAL is deprecated and guarded by READ_PHONE_STATE on
+            // Android 10+. Writing it via reflection can confuse ART's verifier
+            // (observed to crash scoped apps on Android 15). Skip on API 29+.
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
+                setStaticSafe(buildClass, "SERIAL", "hardware_id")
+            }
             setStaticSafe(buildClass, "FINGERPRINT", "fingerprint")
             setStaticSafe(buildClass, "ID", "build_id")
             setStaticSafe(buildClass, "DISPLAY", "build_id")
@@ -39,12 +44,17 @@ internal fun XposedEntry.hookBuildFields(classLoader: ClassLoader) {
     }
 
 internal fun XposedEntry.hookSystemProperties(classLoader: ClassLoader) {
-        try {
-            val spClass = XposedHelpers.findClass("android.os.SystemProperties", classLoader)
-            val hook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val key = param.args[0] as? String ?: return
-                    val fake = when {
+    // SystemProperties callbacks are gated by appInitialized. The hook is
+    // installed early so post-init calls are covered; during init, the
+    // callback is a no-op and the real SystemProperties value is returned.
+    // This protects Chamet's antsec resource lookup during onCreate.
+    try {
+        val spClass = XposedHelpers.findClass("android.os.SystemProperties", classLoader)
+        val hook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!appInitialized) return
+                val key = param.args[0] as? String ?: return
+                val fake = when {
                         key.contains("ro.product.model") -> getValue("model")
                         key.contains("ro.product.manufacturer") -> getValue("manufacturer")
                         key.contains("ro.product.brand") -> getValue("brand")
@@ -86,6 +96,7 @@ internal fun XposedEntry.hookSystemProperties(classLoader: ClassLoader) {
             try {
                 val intHook = object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (!appInitialized) return
                         val key = param.args[0] as? String ?: return
                         if (key.contains("ro.build.version.sdk")) {
                             param.result = XposedEntry.sdkVersionToInt(getValue("android_version"))
@@ -93,9 +104,9 @@ internal fun XposedEntry.hookSystemProperties(classLoader: ClassLoader) {
                     }
                 }
                 XposedHelpers.findAndHookMethod(spClass, "getInt", String::class.java, Int::class.javaPrimitiveType!!, intHook)
-            } catch (e: Throwable) {}
-        } catch (e: Throwable) {}
-    }
+            } catch (_: Throwable) {}
+    } catch (_: Throwable) {}
+}
 
 internal fun XposedEntry.hookUserAgent(classLoader: ClassLoader) {
         try {
@@ -117,41 +128,47 @@ internal fun XposedEntry.hookUserAgent(classLoader: ClassLoader) {
     }
 
 internal fun XposedEntry.hookJavaSystemProperties(classLoader: ClassLoader) {
-        try {
-            val hook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val key = param.args[0] as? String ?: return
-                    val fake = when {
-                        key.contains("http.agent") -> {
-                            log("Hooked java.lang.System.getProperty(http.agent) -> user_agent")
-                            getValue("user_agent")
-                        }
-                        key.contains("os.name") -> "Linux"
-                        key.contains("os.version") -> {
-                            val ver = getValue("android_version")
-                            when {
-                                ver.startsWith("15") -> "6.1.43-android-15"
-                                ver.startsWith("14") -> "5.15.123-android-14"
-                                ver.startsWith("13") -> "5.10.198-android-13"
-                                else -> "6.1.43-android-15"
-                            }
-                        }
-                        key.contains("os.arch") -> "aarch64"
-                        key.contains("java.vm.version") -> "2.1.0"
-                        key.contains("java.runtime.version") -> "1.8.0"
-                        else -> null
+    // java.lang.System.getProperty is DEFERRED until after Application.onCreate
+    // completes. Replacing java.runtime.version / java.vm.version during
+    // early init trips Chamet's antsec integrity check (it reads the runtime
+    // version during class verification). The hook fires normally for the
+    // app's normal operation; only init-time calls pass through to the real
+    // implementation.
+    try {
+        val hook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!appInitialized) return
+                val key = param.args[0] as? String ?: return
+                val fake = when {
+                    key.contains("http.agent") -> {
+                        getValue("user_agent")
                     }
-                    if (fake != null && fake.isNotEmpty()) {
-                        param.result = fake
+                    key.contains("os.name") -> "Linux"
+                    key.contains("os.version") -> {
+                        val ver = getValue("android_version")
+                        when {
+                            ver.startsWith("15") -> "6.1.43-android-15"
+                            ver.startsWith("14") -> "5.15.123-android-14"
+                            ver.startsWith("13") -> "5.10.198-android-13"
+                            else -> "6.1.43-android-15"
+                        }
                     }
+                    key.contains("os.arch") -> "aarch64"
+                    key.contains("java.vm.version") -> "2.1.0"
+                    key.contains("java.runtime.version") -> "1.8.0"
+                    else -> null
+                }
+                if (fake != null && fake.isNotEmpty()) {
+                    param.result = fake
                 }
             }
-            XposedHelpers.findAndHookMethod(java.lang.System::class.java, "getProperty",
-                String::class.java, hook)
-            XposedHelpers.findAndHookMethod(java.lang.System::class.java, "getProperty",
-                String::class.java, String::class.java, hook)
-        } catch (e: Throwable) {
-            XposedBridge.log("DevicePrivy: java.lang.System.getProperty hook error: ${e.message}")
         }
+        XposedHelpers.findAndHookMethod(java.lang.System::class.java, "getProperty",
+            String::class.java, hook)
+        XposedHelpers.findAndHookMethod(java.lang.System::class.java, "getProperty",
+            String::class.java, String::class.java, hook)
+    } catch (_: Throwable) {
+        // Silently skip if java.lang.System.getProperty can't be hooked.
     }
+}
 

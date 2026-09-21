@@ -25,6 +25,9 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : Activity() {
 
@@ -74,6 +77,7 @@ class MainActivity : Activity() {
     private val fieldKeys = groups.flatMap { it.keys }
     private val values = linkedMapOf<String, String>()
     private val inputs = mutableMapOf<String, EditText>()
+    private val detailViews = mutableMapOf<String, TextView>()
     private lateinit var debugLogging: CheckBox
     private lateinit var hideSelf: CheckBox
     private val hookBoxes = mutableMapOf<String, CheckBox>()
@@ -89,6 +93,7 @@ class MainActivity : Activity() {
         "hook_stealth" to "Anti-detection & self-hiding"
     )
     private lateinit var statusText: TextView
+    private lateinit var refreshText: TextView
     private lateinit var summaryText: TextView
     private lateinit var accordionContainer: LinearLayout
     private val expandedGroups = mutableSetOf(0) // first group open by default
@@ -120,6 +125,15 @@ class MainActivity : Activity() {
     private fun validateField(key: String, raw: String): String? = FieldValidators.validate(key, raw)
 
     // ========== Status Detection ==========
+
+    /** Reads deviceprivy.refreshed epoch millis via SystemProperties; 0 if absent. */
+    private fun readRefreshed(): Long {
+        try {
+            val spClass = Class.forName("android.os.SystemProperties")
+            val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
+            return (getMethod.invoke(null, "deviceprivy.refreshed", "0") as? String ?: "0").toLongOrNull() ?: 0
+        } catch (_: Throwable) { return 0 }
+    }
 
     private fun isModuleActive(): Boolean {
         // Check SystemProperties for the refresh timestamp
@@ -156,7 +170,14 @@ class MainActivity : Activity() {
         root.addView(buildHeader())
         root.addView(spacer(12))
         root.addView(buildStatusBadge())
-        root.addView(spacer(12))
+        refreshText = TextView(this).apply {
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(faintColor())
+            setPadding(0, dp(6), 0, 0)
+        }
+        root.addView(refreshText)
+        root.addView(spacer(6))
         root.addView(buildActions())
         root.addView(spacer(12))
         root.addView(buildDeviceCard())
@@ -184,6 +205,15 @@ class MainActivity : Activity() {
         badge.background = rounded(if (active) Color.parseColor("#ECFDF5") else Color.parseColor("#FEF2F2"), 12)
         badge.getChildAt(0)?.background =
             rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
+        if (::refreshText.isInitialized) {
+            val refreshed = readRefreshed()
+            refreshText.text = if (refreshed > 0) {
+                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                "Last refreshed: ${sdf.format(Date(refreshed))}"
+            } else {
+                "Last refreshed: never (Save pushes to props)"
+            }
+        }
     }
 
     // ========== Header ==========
@@ -345,6 +375,7 @@ class MainActivity : Activity() {
                 setHorizontallyScrolling(true)
                 isClickable = true
                 isFocusable = true
+                detailViews[key] = this
                 setOnClickListener {
                     val value = displayValue(key, "")
                     if (value.isBlank() || value == "\u2014") {
@@ -448,7 +479,7 @@ class MainActivity : Activity() {
                 setPadding(0, dp(6), 0, dp(6))
             }
             row.addView(TextView(this).apply {
-                text = "${fmt.format(java.util.Date(ts))}  •  $mfr $model"
+                text = "${fmt.format(java.util.Date(ts))}  •  ${profileTitle(mfr, model)}"
                 textSize = 13f
                 setTextColor(textSecondary())
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -651,9 +682,11 @@ class MainActivity : Activity() {
             setPadding(0, dp(8), 0, 0)
         }
 
-        if (isExpanded) {
-            populateFields(content, group)
-        }
+        // Always populate fields, even for collapsed sections — they sit
+        // hidden until expanded. Doing it lazily (only when expanded) caused
+        // Randomize All to skip fields in non-default sections, because the
+        // EditTexts for those fields never made it into the `inputs` map.
+        populateFields(content, group)
 
         card.addView(content)
         return card
@@ -851,13 +884,11 @@ class MainActivity : Activity() {
         val mfr = displayValue("manufacturer", "Unknown")
         val model = displayValue("model", "Unknown")
         val android = displayValue("android_version", "0")
-        summaryText.text = "$mfr $model\nAndroid $android"
+        summaryText.text = "${profileTitle(mfr, model)}\nAndroid $android"
 
         // Refresh detail views in the device card
-        val root = summaryText.parent?.parent as? ViewGroup ?: return
         for (key in listOf("imei", "android_id", "mac_address", "sim_operator")) {
-            val tv = root.findViewWithTag<TextView>("detail_$key") ?: continue
-            tv.text = displayValue(key, "\u2014")
+            detailViews[key]?.text = displayValue(key, "\u2014")
         }
     }
 
@@ -865,7 +896,38 @@ class MainActivity : Activity() {
         return values[key]?.takeIf { it.isNotBlank() } ?: fallback
     }
 
+    /**
+     * Some profiles store the brand inside `model` already ("OnePlus 13R",
+     * "Xiaomi 15"), so joining manufacturer + model would print it twice.
+     * Collapse to the model when it already starts with the manufacturer.
+     */
+    private fun profileTitle(manufacturer: String, model: String): String =
+        if (model.startsWith(manufacturer, ignoreCase = true)) model else "$manufacturer $model"
+
     // ========== Save ==========
+
+    /**
+     * Cross-process bridge for ROMs that keep app prefs outside the path
+     * XSharedPreferences reads. On this Nothing OS device the framework stores
+     * prefs under /data/misc/<uuid>/prefs/<pkg>/ instead of
+     * /data/user/<id>/<pkg>/shared_prefs/, so XSharedPreferences always comes
+     * back empty and the module falls back to random values per process.
+     *
+     * System properties are globally readable, and the module already reads
+     * them via readFromSystemProperties(). We push the saved config there with
+     * root (same mechanism the module's own bridge uses), so every scoped app
+     * gets the SAME saved identity instead of a fresh random one.
+     */
+    private fun pushConfigToSystemProperties() {
+        try {
+            val hooks = HashMap<String, Boolean>()
+            for ((key, box) in hookBoxes) hooks[key] = box.isChecked
+            Bridge.pushToSystemProperties(Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks))
+            logToLogcat("Bridge props pushed")
+        } catch (e: Exception) {
+            logToLogcat("Bridge push failed: ${e.message}")
+        }
+    }
 
     private fun saveConfig(saveButton: Button? = null) {
         val invalid = fieldKeys.mapNotNull { key ->
@@ -891,6 +953,7 @@ class MainActivity : Activity() {
         if (saved) {
             dirty = false
             pushHistory()
+            pushConfigToSystemProperties()
             logToLogcat("Config saved via commit()")
         } else {
             logToLogcat("Config save failed via commit()")

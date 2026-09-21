@@ -27,8 +27,8 @@ android {
         applicationId "dev.codex.deviceprivy"
         minSdk 27
         targetSdk 33
-        versionCode 57
-        versionName "3.8.5-FIX"
+        versionCode 67
+        versionName "3.9.2"
     }
 
     signingConfigs {

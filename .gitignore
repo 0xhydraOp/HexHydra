@@ -20,3 +20,10 @@ release-key.jks
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local artifacts / dev junk (never push)
+*.log
+*.err
+*.jar
+*.zip
+jdk*/

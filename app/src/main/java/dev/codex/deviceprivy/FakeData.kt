@@ -84,15 +84,26 @@ object FakeData {
         return HardwareProfile(width, height, density, glVendor, glRenderer, scale)
     }
 
-    fun generateValidIMEI(): String {
-        val tac = listOf("35", "86", "44", "49", "01").random()
-        val body = buildString {
-            append(tac)
-            repeat(12) { append((0..9).random()) }
-        }
-        val imei14 = if (body.startsWith("0")) "1" + body.substring(1) else body
-        val checkDigit = calculateLuhnCheckDigit(imei14)
-        return imei14 + checkDigit
+    /**
+     * Generates a real-looking 15-digit IMEI using a verified 8-digit TAC pool
+     * for the given manufacturer. A TAC may legitimately start with "0", so the
+     * leading-digit rewrite is intentionally avoided. Unknown manufacturers fall
+     * back to any verified TAC so the result is always structurally plausible.
+     */
+    fun generateValidIMEI(manufacturer: String = ""): String {
+        val tac = tacFor(manufacturer).random()
+        val serial = buildString { repeat(6) { append((0..9).random()) } }
+        return tac + serial + calculateLuhnCheckDigit(tac + serial)
+    }
+
+    private fun tacFor(manufacturer: String): List<String> {
+        return IdentityData.TAC_POOLS[manufacturer.lowercase()]
+            ?: IdentityData.TAC_POOLS.values.flatten()
+    }
+
+    private fun ouiFor(manufacturer: String): List<String> {
+        return IdentityData.OUI_POOLS[manufacturer.lowercase()]
+            ?: IdentityData.OUI_POOLS.values.flatten()
     }
 
     private fun calculateLuhnCheckDigit(imei: String): Int {
@@ -108,18 +119,26 @@ object FakeData {
         return (10 - (sum % 10)) % 10
     }
 
-    fun randomMac(): String = buildString {
+    /**
+     * Generates a unicast, globally-administered MAC whose OUI comes from a
+     * verified per-manufacturer pool, so the first half of the address matches
+     * a real IEEE allocation for that brand.
+     */
+    fun randomMac(manufacturer: String = ""): String {
+        val oui = ouiFor(manufacturer).random()
         val hex = "0123456789ABCDEF"
-        repeat(6) {
-            if (it > 0) append(":")
-            if (it == 0) {
-                append(hex.random())
-                append("26AE".random())
-            } else {
-                append(hex.random())
-                append(hex.random())
-            }
+        fun octet(): String = buildString {
+            append(hex.random())
+            append(hex.random())
         }
+        return listOf(
+            oui.substring(0, 2),
+            oui.substring(2, 4),
+            oui.substring(4, 6),
+            octet(),
+            octet(),
+            octet()
+        ).joinToString(":")
     }
 
     fun randomHardwareId(): String = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
@@ -194,15 +213,15 @@ object FakeData {
         val androidVersion = "15"
         val buildId = randomBuildId()
         return mapOf(
-            "imei" to generateValidIMEI(),
+            "imei" to generateValidIMEI(device.manufacturer),
             "meid" to randomMeid(),
             "imsi" to randomImsi(carrier.mccMnc),
             "gsf_id" to randomGsfId(),
             "hardware_id" to randomHardwareId(),
-            "mac_address" to randomMac(),
-            "mac_bssid" to randomMac(),
+            "mac_address" to randomMac(device.manufacturer),
+            "mac_bssid" to randomMac(device.manufacturer),
             "mac_ssid" to randomSsid(),
-            "bluetooth_mac" to randomMac(),
+            "bluetooth_mac" to randomMac(device.manufacturer),
             "android_id" to randomAndroidId(),
             "sim_serial" to randomSimSerial(),
             "sim_sub_id" to randomSimSubId(),

@@ -9,9 +9,14 @@ class FakeDataTest {
         for (i in 1..100) {
             val imei = FakeData.generateValidIMEI()
             assertEquals(15, imei.length)
-            assertFalse(imei.startsWith("0"))
             assertTrue(isValidLuhn(imei))
+            // TAC is the leading 8 digits; a real TAC may start with "0".
+            assertTrue(FakeData.generateValidIMEI("Samsung").substring(0, 8) in IdentityData.TAC_POOLS.getValue("samsung"))
         }
+        val onePlus = FakeData.generateValidIMEI("OnePlus").substring(0, 8)
+        assertTrue(onePlus in IdentityData.TAC_POOLS.getValue("oneplus"))
+        val nothing = FakeData.generateValidIMEI("Nothing").substring(0, 8)
+        assertTrue(nothing in IdentityData.TAC_POOLS.getValue("nothing"))
     }
 
     private fun isValidLuhn(imei: String): Boolean {
@@ -103,6 +108,29 @@ class FakeDataTest {
     }
 
     @Test
+    fun generatedMacsUseVerifiedOuiPools() {
+        for (i in 1..100) {
+            val samsung = FakeData.randomMac("Samsung")
+            assertTrue(
+                "OUI not in Samsung pool: $samsung",
+                samsung.substring(0, 8).replace(":", "") in IdentityData.OUI_POOLS.getValue("samsung")
+            )
+            assertValidMac(samsung)
+            val google = FakeData.randomMac("Google")
+            assertTrue(
+                "OUI not in Google pool: $google",
+                google.substring(0, 8).replace(":", "") in IdentityData.OUI_POOLS.getValue("google")
+            )
+            assertValidMac(google)
+            val default = FakeData.randomMac()
+            assertTrue(
+                "OUI outside all pools: $default",
+                default.substring(0, 8).replace(":", "") in IdentityData.OUI_POOLS.values.flatten()
+            )
+        }
+    }
+
+    @Test
     fun generatedProfilesKeepCarrierAndLocaleConsistent() {
         repeat(100) {
             val data = FakeData.generateAll()
@@ -182,7 +210,7 @@ class FakeDataTest {
         assertTrue(value, value.matches(Regex("([0-9A-F]{2}:){5}[0-9A-F]{2}")))
         val firstOctet = value.substring(0, 2).toInt(16)
         assertEquals("MAC should be unicast", 0, firstOctet and 1)
-        assertEquals("MAC should be locally administered", 2, firstOctet and 2)
+        assertEquals("MAC should be globally administered", 0, firstOctet and 2)
     }
 
     private fun String.isUuid(): Boolean {

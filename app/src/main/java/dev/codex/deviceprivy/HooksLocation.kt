@@ -130,37 +130,45 @@ internal fun XposedEntry.hookLocationLive(classLoader: ClassLoader) {
     }
 
 internal fun XposedEntry.hookLocaleAndTimezone(classLoader: ClassLoader) {
-        try {
-            XposedHelpers.findAndHookMethod("java.util.Locale", classLoader, "getDefault", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val localeTag = getValue("locale")
-                    if (localeTag.isNotEmpty()) {
-                        param.result = java.util.Locale.forLanguageTag(localeTag)
-                    }
+    // Locale/TimeZone spoofing is DEFERRED until after Application.onCreate
+    // completes. Replacing Locale.getDefault() during early init breaks
+    // resource resolution — observed in Chamet, where the antsec SDK loads
+    // a hidden resource that fails lookup under an unexpected locale and
+    // throws HandlerException blaming ARouter ("No package ID 6b found").
+    try {
+        XposedHelpers.findAndHookMethod("java.util.Locale", classLoader, "getDefault", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!appInitialized) return
+                val localeTag = getValue("locale")
+                if (localeTag.isNotEmpty()) {
+                    param.result = java.util.Locale.forLanguageTag(localeTag)
                 }
-            })
-        } catch (e: Throwable) {}
+            }
+        })
+    } catch (_: Throwable) {}
         try {
             XposedHelpers.findAndHookMethod("java.util.Locale", classLoader, "getDefault",
                 java.util.Locale.Category::class.java, object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (!appInitialized) return
                         val localeTag = getValue("locale")
                         if (localeTag.isNotEmpty()) {
                             param.result = java.util.Locale.forLanguageTag(localeTag)
                         }
                     }
                 })
-        } catch (e: Throwable) {}
+        } catch (_: Throwable) {}
 
         try {
             XposedHelpers.findAndHookMethod("java.util.TimeZone", classLoader, "getDefault", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
+                    if (!appInitialized) return
                     val zone = getValue("timezone")
                     if (zone.isNotEmpty()) {
                         param.result = java.util.TimeZone.getTimeZone(zone)
                     }
                 }
             })
-        } catch (e: Throwable) {}
-    }
+        } catch (_: Throwable) {}
+}
 
