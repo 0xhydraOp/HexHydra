@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import android.app.Activity
 import android.app.AlertDialog
@@ -31,7 +31,7 @@ import java.util.Locale
 
 class MainActivity : Activity() {
 
-    private val PREFS_NAME = "device_privy_prefs"
+    private val PREFS_NAME = "hexhydra_prefs"
 
     private data class FieldGroup(val title: String, val keys: List<String>)
 
@@ -100,7 +100,7 @@ class MainActivity : Activity() {
     private var searchQuery = ""
     private var dirty = false // true once the user edits anything since load/save
     private val lockedKeys = mutableSetOf<String>() // fields Randomize must not touch
-    private val historyPrefsName = "device_privy_history" // separate file: keeps snapshots out of the hook data path
+    private val historyPrefsName = "hexhydra_history" // separate file: keeps snapshots out of the hook data path
 
     // ========== Dark-mode aware palette ==========
 
@@ -126,12 +126,12 @@ class MainActivity : Activity() {
 
     // ========== Status Detection ==========
 
-    /** Reads deviceprivy.refreshed epoch millis via SystemProperties; 0 if absent. */
+    /** Reads hexhydra.refreshed epoch millis via SystemProperties; 0 if absent. */
     private fun readRefreshed(): Long {
         try {
             val spClass = Class.forName("android.os.SystemProperties")
             val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
-            return (getMethod.invoke(null, "deviceprivy.refreshed", "0") as? String ?: "0").toLongOrNull() ?: 0
+            return (getMethod.invoke(null, "hexhydra.refreshed", "0") as? String ?: "0").toLongOrNull() ?: 0
         } catch (_: Throwable) { return 0 }
     }
 
@@ -140,7 +140,7 @@ class MainActivity : Activity() {
         try {
             val spClass = Class.forName("android.os.SystemProperties")
             val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
-            val refreshed = getMethod.invoke(null, "deviceprivy.refreshed", "") as? String ?: ""
+            val refreshed = getMethod.invoke(null, "hexhydra.refreshed", "") as? String ?: ""
             if (refreshed.isNotEmpty()) return true
         } catch (_: Throwable) {}
         // Fallback: check SharedPreferences populated by module
@@ -236,7 +236,7 @@ class MainActivity : Activity() {
                 setPadding(dp(14), 0, 0, 0)
             }
             copy.addView(TextView(this@MainActivity).apply {
-                text = "DevicePrivy"
+                text = "HexHydra"
                 textSize = 22f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(textPrimary())
@@ -505,7 +505,7 @@ class MainActivity : Activity() {
         try {
             val json = snapshotToJson().toString(2)
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("deviceprivy-profile", json))
+            cm.setPrimaryClip(ClipData.newPlainText("hexhydra-profile", json))
             Toast.makeText(this, "Profile JSON copied to clipboard.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
@@ -1084,6 +1084,6 @@ class MainActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun logToLogcat(msg: String) {
-        android.util.Log.d("DevicePrivy", msg)
+        android.util.Log.d("HexHydra", msg)
     }
 }

@@ -29,7 +29,7 @@
 
         <provider
             android:name=".DataProvider"
-            android:authorities="dev.codex.deviceprivy.provider"
+android:authorities="dev.hexhydra.provider"
             android:exported="false" />
 
         <receiver
@@ -43,7 +43,7 @@
     </application>
 
     <queries>
-        <package android:name="dev.codex.deviceprivy" />
-        <provider android:authorities="dev.codex.deviceprivy.provider" />
+        <package android:name="dev.hexhydra" />
+        <provider android:authorities="dev.hexhydra.provider" />
     </queries>
 </manifest>

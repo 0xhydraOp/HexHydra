@@ -34,13 +34,13 @@
   `Locale`/`TimeZone`, `PackageManager` hiding, and deferred anti-Xposed checks.
   Safe read-only compat getters (`UserAgent`, `Location`/`Fused`/`Live`) stay
   hooked unconditionally.
-- **Reboot persistence (#3):** saved config is re-pushed to `deviceprivy.*`
+- **Reboot persistence (#3):** saved config is re-pushed to `hexhydra.*`
   system properties on boot. New `BootReceiver` (BOOT_COMPLETED, exported)
-  reads `device_privy_prefs` and calls a new `Bridge.pushToSystemProperties()`
+  reads `hexhydra_prefs` and calls a new `Bridge.pushToSystemProperties()`
   — the same single-`su` chain of quote-escaped `setprop` calls the Save
   button uses, so values survive a device reboot without re-opening the app.
   Verified via root `am broadcast` of the receiver: all 51 props re-pushed,
-  `deviceprivy.refreshed` populated (was blank).
+  `hexhydra.refreshed` populated (was blank).
 - Verified on device (Nothing A015, Android 15): build clean (30s), 14/14 unit
   tests pass, reinstall OK.
 - VersionCode: 67

@@ -1,9 +1,9 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 /**
  * Cross-process bridge used by both the UI (on Save) and the boot receiver.
  *
- * The saved config is pushed to globally-readable `deviceprivy.*` system
+ * The saved config is pushed to globally-readable `hexhydra.*` system
  * properties via root. The module reads them with readFromSystemProperties()
  * in every scoped process, so all scoped apps share one consistent identity.
  *
@@ -47,15 +47,15 @@ object Bridge {
         val sb = StringBuilder()
         for ((key, value) in values) {
             if (value.isEmpty()) continue
-            sb.append("setprop deviceprivy.").append(key)
+            sb.append("setprop hexhydra.").append(key)
                 .append(" '").append(value.replace("'", "'\\''")).append("';")
         }
         // refreshed timestamp last, so the module's poller sees a fresh write
-        sb.append("setprop deviceprivy.refreshed '").append(timestamp).append("'")
+        sb.append("setprop hexhydra.refreshed '").append(timestamp).append("'")
         return sb.toString()
     }
 
-    /** Push the given key/value map to `deviceprivy.*` system properties. */
+    /** Push the given key/value map to `hexhydra.*` system properties. */
     fun pushToSystemProperties(values: Map<String, String>) {
         try {
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", buildPushScript(values)))

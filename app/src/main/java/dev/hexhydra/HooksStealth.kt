@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import android.os.Build
 import de.robv.android.xposed.XC_MethodHook

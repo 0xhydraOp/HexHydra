@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import android.content.Context
 import android.database.MatrixCursor

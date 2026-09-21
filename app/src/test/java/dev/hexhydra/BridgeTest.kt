@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import org.junit.Test
 import org.junit.Assert.*
@@ -37,9 +37,9 @@ class BridgeTest {
             timestamp = 123456789L
         )
 
-        assertTrue(script.contains("setprop deviceprivy.model 'Pixel 8';"))
-        assertTrue(script.contains("setprop deviceprivy.android_version '15';"))
-        assertFalse(script.contains("deviceprivy.imei"))
+        assertTrue(script.contains("setprop hexhydra.model 'Pixel 8';"))
+        assertTrue(script.contains("setprop hexhydra.android_version '15';"))
+        assertFalse(script.contains("hexhydra.imei"))
     }
 
     @Test
@@ -49,16 +49,16 @@ class BridgeTest {
             timestamp = 123456789L
         )
 
-        assertTrue(script.endsWith("setprop deviceprivy.refreshed '123456789'"))
-        val refreshedIndex = script.indexOf("deviceprivy.refreshed")
-        assertTrue(refreshedIndex > script.indexOf("deviceprivy.model"))
+        assertTrue(script.endsWith("setprop hexhydra.refreshed '123456789'"))
+        val refreshedIndex = script.indexOf("hexhydra.refreshed")
+        assertTrue(refreshedIndex > script.indexOf("hexhydra.model"))
     }
 
     @Test
     fun buildPushScriptEsquotesApostrophesAndDoubleQuotes() {
         val script = Bridge.buildPushScript(mapOf("device_name" to "Bob's \"Galaxy\""), timestamp = 1L)
         // Apostrophes are shell-escaped; double quotes are safe inside single quotes.
-        assertTrue(script, script.contains("setprop deviceprivy.device_name 'Bob'\\''s \"Galaxy\"';"))
+        assertTrue(script, script.contains("setprop hexhydra.device_name 'Bob'\\''s \"Galaxy\"';"))
     }
 
     @Test
@@ -74,16 +74,16 @@ class BridgeTest {
 
         val parsed = parseShellLiterals(script)
         // Every value is preserved verbatim after sh-style parsing.
-        assertTrue("locale lost", parsed.contains("deviceprivy.locale $lang"))
-        assertTrue("value with quotes lost", parsed.contains("deviceprivy.device_name $value"))
-        assertTrue("refresh timestamp lost", parsed.contains("deviceprivy.refreshed 1"))
+        assertTrue("locale lost", parsed.contains("hexhydra.locale $lang"))
+        assertTrue("value with quotes lost", parsed.contains("hexhydra.device_name $value"))
+        assertTrue("refresh timestamp lost", parsed.contains("hexhydra.refreshed 1"))
     }
 
     @Test
     fun buildPushScriptWithEmptyMapStillWritesTimestamp() {
         val script = Bridge.buildPushScript(emptyMap(), timestamp = 5L)
-        assertTrue(script.endsWith("setprop deviceprivy.refreshed '5'"))
-        assertTrue(script.startsWith("setprop deviceprivy.refreshed"))
+        assertTrue(script.endsWith("setprop hexhydra.refreshed '5'"))
+        assertTrue(script.startsWith("setprop hexhydra.refreshed"))
         assertTrue(script.endsWith("'5'"))
     }
 
@@ -95,7 +95,7 @@ class BridgeTest {
         // After sh-style parsing, the value is reconstructed as a single literal:
         // neither ';' nor '&' terminates the setprop, and nothing is executed.
         val parsed = parseShellLiterals(script)
-        assertTrue("value mangled", parsed.contains("deviceprivy.network_operator $evil"))
+        assertTrue("value mangled", parsed.contains("hexhydra.network_operator $evil"))
     }
 
     @Test
@@ -104,8 +104,8 @@ class BridgeTest {
             mapOf("device_name" to "Galaxy S25 Ultra (5G) #Pro", "build_id" to "7ZP45C"),
             timestamp = 42L
         )
-        assertTrue(script.contains("setprop deviceprivy.device_name 'Galaxy S25 Ultra (5G) #Pro';"))
-        assertTrue(script.contains("setprop deviceprivy.build_id '7ZP45C';"))
+        assertTrue(script.contains("setprop hexhydra.device_name 'Galaxy S25 Ultra (5G) #Pro';"))
+        assertTrue(script.contains("setprop hexhydra.build_id '7ZP45C';"))
     }
 
     @Test
@@ -117,12 +117,12 @@ class BridgeTest {
         )
         val script = Bridge.buildPushScript(values, timestamp = 7L)
 
-        val modelIdx = script.indexOf("deviceprivy.model")
-        val imeiIdx = script.indexOf("deviceprivy.imei")
-        val localeIdx = script.indexOf("deviceprivy.locale")
+        val modelIdx = script.indexOf("hexhydra.model")
+        val imeiIdx = script.indexOf("hexhydra.imei")
+        val localeIdx = script.indexOf("hexhydra.locale")
         assertTrue(modelIdx in 0 until imeiIdx)
         assertTrue(imeiIdx in 0 until localeIdx)
-        assertTrue(localeIdx < script.indexOf("deviceprivy.refreshed"))
+        assertTrue(localeIdx < script.indexOf("hexhydra.refreshed"))
     }
 
     @Test
@@ -133,7 +133,7 @@ class BridgeTest {
             val parsed = parseShellLiterals(script)
             for ((key, value) in data) {
                 if (value.isNotBlank()) {
-                    assertTrue("$key not round-tripped", parsed.contains("deviceprivy.$key $value"))
+                    assertTrue("$key not round-tripped", parsed.contains("hexhydra.$key $value"))
                 }
             }
         }

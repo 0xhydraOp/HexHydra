@@ -15,5 +15,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DevicePrivy"
+rootProject.name = "HexHydra"
 include ":app"

@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import android.content.Intent
 import android.content.IntentFilter

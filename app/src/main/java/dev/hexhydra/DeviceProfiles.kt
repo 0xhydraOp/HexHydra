@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 data class DeviceEntry(val manufacturer: String, val model: String, val codename: String, val product: String)
 

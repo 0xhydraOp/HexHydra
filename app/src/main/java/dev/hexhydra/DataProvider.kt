@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import android.content.ContentProvider
 import android.content.ContentValues
@@ -9,7 +9,7 @@ import android.net.Uri
 
 class DataProvider : ContentProvider() {
 
-    private val PREFS_NAME = "device_privy_prefs"
+    private val PREFS_NAME = "hexhydra_prefs"
 
     override fun onCreate(): Boolean = true
 

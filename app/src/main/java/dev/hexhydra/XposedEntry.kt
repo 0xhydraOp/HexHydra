@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -13,8 +13,8 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 
 class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
-    internal val MODULE_PACKAGE = "dev.codex.deviceprivy"
-    private val PREFS_NAME = "device_privy_prefs"
+    internal val MODULE_PACKAGE = "dev.hexhydra"
+    private val PREFS_NAME = "hexhydra_prefs"
     private val PROVIDER_URI = Uri.parse("content://$MODULE_PACKAGE.provider")
     
     private var debugEnabled = false
@@ -43,11 +43,11 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
     @Volatile internal var appInitialized = false
 
     override fun initZygote(startupParam: IXposedHookZygoteInit.StartupParam) {
-        XposedBridge.log("DevicePrivy: initZygote started")
+        XposedBridge.log("HexHydra: initZygote started")
         initPrefs()
         fetchData()
         if (cachedValues.isEmpty()) {
-            XposedBridge.log("DevicePrivy: initZygote - no prefs data, generating fake defaults")
+            XposedBridge.log("HexHydra: initZygote - no prefs data, generating fake defaults")
             cachedValues.putAll(FakeData.generateAll())
         }
         if (!dataFetched) dataFetched = true
@@ -55,7 +55,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
         writeToSystemProperties()
         lastSysPropRefresh = System.currentTimeMillis()
         debugEnabled = cachedValues["setting_debug_log"] == "true"
-        XposedBridge.log("DevicePrivy: initZygote complete, ${cachedValues.size} values cached")
+        XposedBridge.log("HexHydra: initZygote complete, ${cachedValues.size} values cached")
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -77,7 +77,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             return
         }
 
-        XposedBridge.log("DevicePrivy: [${lpparam.packageName}] Loading module hooks")
+        XposedBridge.log("HexHydra: [${lpparam.packageName}] Loading module hooks")
 
         // Always re-fetch from shared prefs so the user's saved values take priority
         dataFetched = false
@@ -88,7 +88,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
         // still delivered by the plain getter hooks below.
         val safeMode = inCompatibilityMode(lpparam.packageName)
         if (safeMode) {
-            XposedBridge.log("DevicePrivy: [${lpparam.packageName}] compatibility mode — skipping anti-detection/reflection hooks")
+            XposedBridge.log("HexHydra: [${lpparam.packageName}] compatibility mode — skipping anti-detection/reflection hooks")
         }
         
         // NOTE: hookBuildFields is DEFERRED — it runs from
@@ -114,7 +114,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                         val app = param.args[0] as? android.app.Application
                         if (app != null) {
                             appContext = app.applicationContext ?: app
-                            XposedBridge.log("DevicePrivy: [${lpparam.packageName}] Application context captured, refreshing data")
+                            XposedBridge.log("HexHydra: [${lpparam.packageName}] Application context captured, refreshing data")
                             dataFetched = false
                             fetchData(appContext)
                             if (!dataFetched) dataFetched = true
@@ -140,7 +140,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                             if (hookEnabled("hook_device")) {
                                 try { hookBuildFields(lpparam.classLoader) } catch (_: Throwable) {}
                             }
-                            XposedBridge.log("DevicePrivy: [${lpparam.packageName}] Application onCreate complete, deferred hooks now active")
+                            XposedBridge.log("HexHydra: [${lpparam.packageName}] Application onCreate complete, deferred hooks now active")
                         }
                     }
                 })
@@ -221,12 +221,12 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                         dataFetched = true
                         dataFromUserPrefs = true
                         debugEnabled = cachedValues["setting_debug_log"] == "true"
-                        XposedBridge.log("DevicePrivy: Data fetched via XSharedPreferences (count=${all.size})")
+                        XposedBridge.log("HexHydra: Data fetched via XSharedPreferences (count=${all.size})")
                         return
                     }
                 }
             } catch (e: Throwable) {
-                XposedBridge.log("DevicePrivy: XSharedPreferences error: ${e.message}")
+                XposedBridge.log("HexHydra: XSharedPreferences error: ${e.message}")
             }
 
             try {
@@ -250,13 +250,13 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                             }
                             dataFetched = true
                             debugEnabled = getValue("setting_debug_log") == "true"
-                            XposedBridge.log("DevicePrivy: Data updated via ContentProvider (count=${cursor.count})")
+                            XposedBridge.log("HexHydra: Data updated via ContentProvider (count=${cursor.count})")
                             return
                         }
                     }
                 }
             } catch (e: Throwable) {
-                if (contextHint != null) XposedBridge.log("DevicePrivy: ContentProvider update error: ${e.message}")
+                if (contextHint != null) XposedBridge.log("HexHydra: ContentProvider update error: ${e.message}")
             }
 
             // Fallback: Shared file (written by main zygote, readable across processes)
@@ -271,7 +271,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             // Fallback: SystemProperties (may have stale data from initZygote)
             if (cachedValues.isEmpty()) {
                 if (!readFromSystemProperties()) {
-                    XposedBridge.log("DevicePrivy: All data sources failed, generating fake defaults")
+                    XposedBridge.log("HexHydra: All data sources failed, generating fake defaults")
                     cachedValues.putAll(FakeData.generateAll())
                 }
             }
@@ -289,7 +289,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             try {
                 val spClass = Class.forName("android.os.SystemProperties")
                 val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
-                val refreshed = getMethod.invoke(null, "deviceprivy.refreshed", "0") as? String ?: "0"
+                val refreshed = getMethod.invoke(null, "hexhydra.refreshed", "0") as? String ?: "0"
                 val ts = refreshed.toLongOrNull() ?: 0
                 if (ts > lastSysPropRefresh) {
                     readFromSystemProperties()
@@ -308,7 +308,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
     }
 
     internal fun log(msg: String) {
-        if (debugEnabled) XposedBridge.log("DevicePrivy: $msg")
+        if (debugEnabled) XposedBridge.log("HexHydra: $msg")
     }
 
     internal fun hookEnabled(key: String): Boolean = cachedValues[key] != "false"
@@ -454,14 +454,14 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     // ========== Shared File IPC (Android 15 cross-process workaround) ==========
     
-    private val SHARED_FILE = "/data/adb/deviceprivy_data.json"
+    private val SHARED_FILE = "/data/adb/hexhydra_data.json"
 
     private fun writeSharedFile() {
         // Skip if another zygote already wrote SystemProperties recently (prevents duplicate su prompts)
         try {
             val spClass = Class.forName("android.os.SystemProperties")
             val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
-            val existing = getMethod.invoke(null, "deviceprivy.refreshed", "") as? String ?: ""
+            val existing = getMethod.invoke(null, "hexhydra.refreshed", "") as? String ?: ""
             if (existing.isNotEmpty()) {
                 val lastWrite = existing.toLongOrNull() ?: 0L
                 if (System.currentTimeMillis() - lastWrite < 120_000L) return // written < 2 min ago
@@ -475,23 +475,23 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             for ((key, value) in cachedValues) {
                 if (value.isNotEmpty() && key in KNOWN_KEYS) {
                     // Escape single quotes for the su -c shell layer (e.g. device_name "O'Brien").
-                    sb.append("setprop deviceprivy.$key '${value.replace("'", "'\\''")}'")
+                    sb.append("setprop hexhydra.$key '${value.replace("'", "'\\''")}'")
                     sb.append(";")
                 }
             }
-            sb.append("setprop deviceprivy.refreshed '${System.currentTimeMillis()}'")
+            sb.append("setprop hexhydra.refreshed '${System.currentTimeMillis()}'")
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", sb.toString()))
             process.waitFor()
             if (process.exitValue() == 0) {
                 lastSysPropRefresh = System.currentTimeMillis()
-                XposedBridge.log("DevicePrivy: SystemProperties written via setprop (${cachedValues.size} values)")
+                XposedBridge.log("HexHydra: SystemProperties written via setprop (${cachedValues.size} values)")
             }
         } catch (e: Throwable) {
             // Fallback: try JSON file (may still fail on strict SELinux)
             try {
                 val json = org.json.JSONObject(cachedValues as Map<String, Any>).toString()
                 java.io.File(SHARED_FILE).writeText(json)
-                XposedBridge.log("DevicePrivy: Shared file written (fallback)")
+                XposedBridge.log("HexHydra: Shared file written (fallback)")
             } catch (_: Throwable) {}
         }
     }
@@ -509,10 +509,10 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             for (key in obj.keys()) {
                 cachedValues[key] = obj.optString(key, "")
             }
-            XposedBridge.log("DevicePrivy: Data fetched via shared file (count=${cachedValues.size})")
+            XposedBridge.log("HexHydra: Data fetched via shared file (count=${cachedValues.size})")
             return cachedValues.isNotEmpty()
         } catch (e: Throwable) {
-            XposedBridge.log("DevicePrivy: Shared file read error: ${e.message}")
+            XposedBridge.log("HexHydra: Shared file read error: ${e.message}")
             return false
         }
     }
@@ -525,13 +525,13 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             for ((key, value) in cachedValues) {
                 if (value.isNotEmpty() && key in KNOWN_KEYS) {
                     try {
-                        setMethod.invoke(null, "deviceprivy.$key", value)
+                        setMethod.invoke(null, "hexhydra.$key", value)
                         count++
                     } catch (e: Throwable) {}
                 }
             }
-            setMethod.invoke(null, "deviceprivy.refreshed", System.currentTimeMillis().toString())
-            XposedBridge.log("DevicePrivy: SystemProperties written ($count values)")
+            setMethod.invoke(null, "hexhydra.refreshed", System.currentTimeMillis().toString())
+            XposedBridge.log("HexHydra: SystemProperties written ($count values)")
         } catch (e: Throwable) {
             log("SystemProperties write error: ${e.message}")
         }
@@ -542,12 +542,12 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             val spClass = Class.forName("android.os.SystemProperties")
             val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
             
-            val refreshed = getMethod.invoke(null, "deviceprivy.refreshed", "") as? String ?: ""
+            val refreshed = getMethod.invoke(null, "hexhydra.refreshed", "") as? String ?: ""
             if (refreshed.isEmpty()) return false
 
             var count = 0
             for (key in KNOWN_KEYS) {
-                val value = getMethod.invoke(null, "deviceprivy.$key", "") as? String ?: ""
+                val value = getMethod.invoke(null, "hexhydra.$key", "") as? String ?: ""
                 if (value.isNotEmpty()) {
                     cachedValues[key] = value
                     count++
@@ -556,11 +556,11 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             if (count > 0) {
                 dataFetched = true
                 debugEnabled = cachedValues["setting_debug_log"] == "true"
-                XposedBridge.log("DevicePrivy: Read $count values from SystemProperties")
+                XposedBridge.log("HexHydra: Read $count values from SystemProperties")
                 return true
             }
         } catch (e: Throwable) {
-            XposedBridge.log("DevicePrivy: SystemProperties read error: ${e.message}")
+            XposedBridge.log("HexHydra: SystemProperties read error: ${e.message}")
         }
         return false
     }

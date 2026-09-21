@@ -1,13 +1,13 @@
-# DevicePrivy
+# HexHydra
 
-[![Build](https://github.com/0xhydraOp/DevicePrivy/actions/workflows/build.yml/badge.svg)](https://github.com/0xhydraOp/DevicePrivy/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/version-v3.9.2-blue)](https://github.com/0xhydraOp/DevicePrivy/releases/tag/v3.9.2)
+[![Build](https://github.com/0xhydraOp/HexHydra/actions/workflows/build.yml/badge.svg)](https://github.com/0xhydraOp/HexHydra/actions/workflows/build.yml)
+[![Version](https://img.shields.io/badge/version-v3.9.2-blue)](https://github.com/0xhydraOp/HexHydra/releases/tag/v3.9.2)
 [![Platform](https://img.shields.io/badge/platform-Android%2015%20%7C%20LSPosed-green)]()
 [![License](https://img.shields.io/badge/license-approval--required-lightgrey)](LICENSE)
 
-**DevicePrivy** is an [LSPosed](https://github.com/LSPosed/LSPosed)/Xposed module that presents a fully synthetic device identity to scoped apps. It intercepts **41 device identifiers** at the Android framework layer and serves them from a single, user-controlled profile — internally consistent across telephony, network, locale, and hardware surfaces.
+**HexHydra** is an [LSPosed](https://github.com/LSPosed/LSPosed)/Xposed module that presents a fully synthetic device identity to scoped apps. It intercepts **41 device identifiers** at the Android framework layer and serves them from a single, user-controlled profile — internally consistent across telephony, network, locale, and hardware surfaces.
 
-> **Scope note.** DevicePrivy operates at the Java framework layer. It defeats ordinary apps and SDKs that read identity through public Android APIs. It does **not** spoof native-layer reads or hardware-backed attestation — see [Known limitations](#known-limitations).
+> **Scope note.** HexHydra operates at the Java framework layer. It defeats ordinary apps and SDKs that read identity through public Android APIs. It does **not** spoof native-layer reads or hardware-backed attestation — see [Known limitations](#known-limitations).
 
 ---
 
@@ -35,8 +35,8 @@
 
 ```
 ┌────────────────┐   ✏️ save    ┌────────────────────────┐
-│  DevicePrivy   │ ───────────▶ │ SharedPreferences     │
-│  UI            │              │ device_privy_prefs    │
+│  HexHydra   │ ───────────▶ │ SharedPreferences     │
+│  UI            │              │ hexhydra_prefs    │
 └────────────────┘              │ (world-readable for   │
                                 │  XSharedPreferences)  │
                                 └───────────┬────────────┘
@@ -44,7 +44,7 @@
                                             ▼
                           ┌────────────────────────────┐
                           │  XposedEntry.initZygote    │────▶ ③ setprop bridge
-                          │  4-strategy config read    │      (deviceprivy.*,
+                          │  4-strategy config read    │      (hexhydra.*,
                           │                            │       via root su)
                           └───────────┬────────────────┘
                                       │ ② scoped app spawns
@@ -66,7 +66,7 @@
 - **Missing key = hook enabled.** The eight hook-category toggles default to *on*, so older configs upgrade without silently losing coverage.
 - **Never-empty guarantee.** If every bridge fails, the hook layer serves freshly generated data rather than leaking real values.
 - **Crash-safe by construction.** No `sun.misc.Unsafe`, no `hookAllMethods`, and every hook install is individually guarded — one failing hook never takes down an app.
-- **Persistence across reboots.** Saved config is re-pushed to the `deviceprivy.*` system properties at `BOOT_COMPLETED`, so spoofed values survive a reboot without reopening the app.
+- **Persistence across reboots.** Saved config is re-pushed to the `hexhydra.*` system properties at `BOOT_COMPLETED`, so spoofed values survive a reboot without reopening the app.
 
 ## Spoofing coverage
 
@@ -150,8 +150,8 @@ CI runs `assembleDebug` + the full unit-test suite on every push and PR (`.githu
 
 1. Install LSPosed (Zygisk build) on a rooted device.
 2. Install the APK — `adb install app-debug.apk` for testing.
-3. In LSPosed Manager, enable DevicePrivy and **scope your target apps**.
-4. Open DevicePrivy → **Randomize** (or edit fields directly) → **Save**.
+3. In LSPosed Manager, enable HexHydra and **scope your target apps**.
+4. Open HexHydra → **Randomize** (or edit fields directly) → **Save**.
 5. Restart the target app (or use **Soft Reboot** from the app, root required).
 
 > After an APK upgrade, re-check the LSPosed scope — Android assigns a new install path and LSPosed may need the module re-enabled and re-scoped.
@@ -159,13 +159,13 @@ CI runs `assembleDebug` + the full unit-test suite on every push and PR (`.githu
 ## Verifying it works
 
 1. Scope a device-info app (e.g. *Device Info*) in LSPosed.
-2. In DevicePrivy, randomize + save; note the IMEI / IMSI / Android ID shown.
+2. In HexHydra, randomize + save; note the IMEI / IMSI / Android ID shown.
 3. Open the scoped app — it must show **your** values, and IMSI must differ from the SIM serial.
 4. The status badge must read **MODULE ACTIVE**.
 
 ## Configuration reference
 
-All settings live in `device_privy_prefs` (plus `device_privy_history` for snapshots — kept out of the hook data path):
+All settings live in `hexhydra_prefs` (plus `hexhydra_history` for snapshots — kept out of the hook data path):
 
 | Key family | Example | Notes |
 |---|---|---|
@@ -178,7 +178,7 @@ All settings live in `device_privy_prefs` (plus `device_privy_history` for snaps
 ## Project structure
 
 ```
-app/src/main/java/dev/codex/deviceprivy/
+app/src/main/java/dev/hexhydra/
 ├── XposedEntry.kt       # lifecycle; 4-strategy config bridge (XSP → provider → file → sysprops → FakeData)
 ├── HooksDevice.kt       # Build fields, SystemProperties, UA, java.lang.System
 ├── HooksTelephony.kt    # TelephonyManager, PhoneStateListener
@@ -188,7 +188,7 @@ app/src/main/java/dev/codex/deviceprivy/
 ├── HooksHardware.kt     # Display, OpenGL, battery, sensors
 ├── HooksStealth.kt      # PackageManager hiding, Class.forName, /proc filters
 ├── Bridge.kt            # pushToSystemProperties(): single-su setprop chain with quote escaping
-├── BootReceiver.kt      # BOOT_COMPLETED → re-pushes saved config to deviceprivy.*
+├── BootReceiver.kt      # BOOT_COMPLETED → re-pushes saved config to hexhydra.*
 ├── FakeData.kt          # generators (verified TAC IMEI, OUI MAC, MCC/MNC IMSI, city geo, …)
 ├── DeviceProfiles.kt    # 42 device entries
 ├── IdentityData.kt      # verified per-manufacturer TAC + OUI pools (pure data)

@@ -1,12 +1,12 @@
-# DevicePrivy - Session Handoff Document
+# HexHydra - Session Handoff Document
 
 ## Project at a Glance
 
-**DevicePrivy** (`dev.codex.deviceprivy`) is an LSPosed/Xposed module for Android that spoofs device identifiers (IMEI, MAC, Build fields, location, etc.) for apps the user scopes in LSPosed Manager.
+**HexHydra** (`dev.hexhydra`) is an LSPosed/Xposed module for Android that spoofs device identifiers (IMEI, MAC, Build fields, location, etc.) for apps the user scopes in LSPosed Manager.
 
 - **Version**: 3.9.2 (versionCode 67) - installed on device at time of handoff
 - **APK on disk**: `app\build\outputs\apk\debug\app-debug.apk` (~963 KB)
-- **Package**: `dev.codex.deviceprivy`
+- **Package**: `dev.hexhydra`
 - **Min SDK**: 27 (Android 8.1+), target SDK 33
 - **License**: Custom "approval required" - personal use OK, forking/modifying needs written permission
 
@@ -57,8 +57,8 @@ Sometimes `adb install` fails with "failed to stat" - workaround: push to `/data
 ```
 app/src/main/
   AndroidManifest.xml          # xposedmodule=true, xposedminversion=93, MainActivity + DataProvider + BootReceiver
-  assets/xposed_init            # "dev.codex.deviceprivy.XposedEntry"
-  java/dev/codex/deviceprivy/
+  assets/xposed_init            # "dev.hexhydra.XposedEntry"
+  java/dev/hexhydra/
     XposedEntry.kt              # XposedEntry + ZygoteInit, appInitialized, deferred-init
     HooksDevice.kt              # Build.*, Build.VERSION, SystemProperties (gated),
                                 #   WebSettings/WebView (UA), java.lang.System.getProperty (gated)
@@ -82,7 +82,7 @@ FakeData.kt                 # Pure-Kotlin generators (Luhn IMEI via verified TAC
     MainActivity.kt             # Programmatic UI (~1026 lines). No XML layouts.
 ```
 
-Unit tests in `app/src/test/java/dev/codex/deviceprivy/`:
+Unit tests in `app/src/test/java/dev/hexhydra/`:
 - `FakeDataTest.kt` - 8 tests (IMEI Luhn validity, MAC OUI-pool membership)
 - `FieldValidatorsTest.kt` - 7 tests
 - `ProfileCoherenceTest.kt` - 15 tests (2,000-iteration coherence fuzz + contradiction cases)
@@ -97,8 +97,8 @@ Total: 41 tests, all pass.
 ### Data flow
 
 1. User edits in MainActivity -> in-memory `values: LinkedHashMap<String, String>`
-2. User saves -> `SharedPreferences` named `device_privy_prefs` (MODE_PRIVATE, world-readable for XSharedPreferences)
-3. App launches -> `XposedEntry.initZygote` reads via 4-strategy fallback: XSharedPreferences -> ContentProvider -> `/data/adb/deviceprivy_data.json` -> SystemProperties -> `FakeData.generateAll()`
+2. User saves -> `SharedPreferences` named `hexhydra_prefs` (MODE_PRIVATE, world-readable for XSharedPreferences)
+3. App launches -> `XposedEntry.initZygote` reads via 4-strategy fallback: XSharedPreferences -> ContentProvider -> `/data/adb/hexhydra_data.json` -> SystemProperties -> `FakeData.generateAll()`
 4. App spawns -> `XposedEntry.handleLoadPackage` for scoped apps
 5. **Deferred init** (v3.8.7+): Build/SystemProperties/Locale/Java system property hooks gated by `appInitialized`, flipped true in `afterHookedMethod` of `Instrumentation.callApplicationOnCreate` so init-time checks see real values
 
@@ -138,7 +138,7 @@ The user wants Chamet (`com.hkfuliao.chamet`) spoofed. **None of the current fra
 | Vector-only scope (v3.8.6) | FATAL `ClassNotFoundException: androidx.core.app.CoreComponentFactory` |
 | Vector + NeoZygisk (v3.8.9-NEOZTEST) | Same crash, identical stack |
 | LSPosed-only, Vector disabled (v3.8.11-LSPDTEST) | Same crash, different framework wrapper |
-| LSPatch sig bypass 2 + DevicePrivy | ARRouter crash (antsec detects re-signed APK) |
+| LSPatch sig bypass 2 + HexHydra | ARRouter crash (antsec detects re-signed APK) |
 | LSPatch sig bypass 2 + NO module | **Same ARRouter crash** - confirms it is LSPatch, not our hooks |
 
 ### Root cause (verified by reading Vector source)
@@ -150,15 +150,15 @@ The user wants Chamet (`com.hkfuliao.chamet`) spoofed. **None of the current fra
 
 ### Skip list was removed in v3.9.0 (user-requested)
 
-The v3.8.x series had `SKIP_PACKAGES = setOf("com.hkfuliao.chamet")` to keep Chamet usable. **Removed per user request.** Trade-off: in v3.9.0, scoping Chamet to DevicePrivy will cause Chamet to crash at launch (the same antsec-related FATAL as before). User accepted this. Workaround: remove Chamet from the LSPosed Manager scope list.
+The v3.8.x series had `SKIP_PACKAGES = setOf("com.hkfuliao.chamet")` to keep Chamet usable. **Removed per user request.** Trade-off: in v3.9.0, scoping Chamet to HexHydra will cause Chamet to crash at launch (the same antsec-related FATAL as before). User accepted this. Workaround: remove Chamet from the LSPosed Manager scope list.
 
 ---
 
 ## What Works Right Now
 
-- DevicePrivy v3.9.2 installed (versionCode 67)
+- HexHydra v3.9.2 installed (versionCode 67)
 - All scoped apps other than Chamet get full identity spoofing with deferred-init safety
-- Spoofed profile survives reboot: `BootReceiver` re-pushes `deviceprivy.*`
+- Spoofed profile survives reboot: `BootReceiver` re-pushes `hexhydra.*`
   props at BOOT_COMPLETED (verified via root broadcast, all 51 props)
 - Riskier hooks (SystemProperties, `System.getProperty`, Locale/Timezone,
   PackageManager hiding) sit behind the safeMode gate; safe read-only getters
@@ -182,7 +182,7 @@ The v3.8.x series had `SKIP_PACKAGES = setOf("com.hkfuliao.chamet")` to keep Cha
 
 Verified live on the device (Nothing A015, Android 15):
 
-1. `adb shell dumpsys package dev.codex.deviceprivy` -> versionName 3.9.1 / versionCode 66
+1. `adb shell dumpsys package dev.hexhydra` -> versionName 3.9.1 / versionCode 66
 2. Launched MainActivity; tapped **Randomize Profile**
 3. Device Profile card updated: title + IMEI / Android ID / WiFi MAC / Carrier all populated
 4. Expanded all 6 groups — every field non-blank
@@ -192,7 +192,7 @@ Verified live on the device (Nothing A015, Android 15):
    (unsaved randomize discarded) = persistence confirmed
 
 ### Note: `su` cannot see the app's shared_prefs
-`su -c 'ls /data/user/0/dev.codex.deviceprivy/shared_prefs/'` shows an empty
+`su -c 'ls /data/user/0/dev.hexhydra/shared_prefs/'` shows an empty
 dir, while the app persists correctly across cold restarts. This is a Magisk
 mount-namespace illusion — trust the cold-restart test, not the root `ls`.
 `run-as` is also blocked (data dir perms reported as `40755`).
@@ -203,12 +203,12 @@ mount-namespace illusion — trust the cold-restart test, not the root `ls`.
 
 Verified live on the device (Nothing A015, Android 15):
 
-1. `adb shell dumpsys package dev.codex.deviceprivy` -> versionName 3.9.2 / versionCode 67
+1. `adb shell dumpsys package dev.hexhydra` -> versionName 3.9.2 / versionCode 67
 2. Rebuilt (30s, 14/14 unit tests) + reinstalled via `adb install -r` — Success
 3. Boot re-push exercised via root broadcast:
-   `adb shell "su -c 'am broadcast -a android.intent.action.BOOT_COMPLETED -n dev.codex.deviceprivy/.BootReceiver'"`
-   -> `deviceprivy.refreshed` = 1789969283835 (was blank) and all 51
-   `deviceprivy.*` props re-pushed => receiver registration, exported flag,
+   `adb shell "su -c 'am broadcast -a android.intent.action.BOOT_COMPLETED -n dev.hexhydra/.BootReceiver'"`
+   -> `hexhydra.refreshed` = 1789969283835 (was blank) and all 51
+   `hexhydra.*` props re-pushed => receiver registration, exported flag,
    XSharedPreferences read from boot context, and the su setprop chain
    all work end-to-end.
 4. 14/14 unit tests pass
@@ -220,7 +220,7 @@ drives the same receiver code path.
 
 | File | Change |
 |---|---|
-| `app/src/main/java/dev/codex/deviceprivy/MainActivity.kt` | Added `detailViews` map; `detailRow()` registers its TextView; `refreshSummary()` writes detail rows directly (was searching the wrong parent); added `profileTitle()` and used it in `refreshSummary()` + `refreshHistory()` to drop duplicate brand |
+| `app/src/main/java/dev/hexhydra/MainActivity.kt` | Added `detailViews` map; `detailRow()` registers its TextView; `refreshSummary()` writes detail rows directly (was searching the wrong parent); added `profileTitle()` and used it in `refreshSummary()` + `refreshHistory()` to drop duplicate brand |
 | `app/build.gradle` | Bumped versionCode 65 -> 66, versionName `3.9.0` -> `3.9.1` |
 | `CHANGELOG.md` | Added v3.9.1 entry |
 | `HANDOFF.md` | Updated version, verification, and file lists |
@@ -229,16 +229,16 @@ drives the same receiver code path.
 
 | File | Change |
 |---|---|
-| `app/src/main/java/dev/codex/deviceprivy/Bridge.kt` | **New.** `pushToSystemProperties(map)`: single `su -c '…'` chain of `setprop deviceprivy.<key> '<escaped>'` (single-quote escaped via `'\''`), `deviceprivy.refreshed` appended last |
-| `app/src/main/java/dev/codex/deviceprivy/BootReceiver.kt` | **New.** BOOT_COMPLETED receiver: loads `device_privy_prefs`, converts String/Boolean prefs to a map, calls `Bridge.pushToSystemProperties` |
+| `app/src/main/java/dev/hexhydra/Bridge.kt` | **New.** `pushToSystemProperties(map)`: single `su -c '…'` chain of `setprop hexhydra.<key> '<escaped>'` (single-quote escaped via `'\''`), `hexhydra.refreshed` appended last |
+| `app/src/main/java/dev/hexhydra/BootReceiver.kt` | **New.** BOOT_COMPLETED receiver: loads `hexhydra_prefs`, converts String/Boolean prefs to a map, calls `Bridge.pushToSystemProperties` |
 | `app/src/main/AndroidManifest.xml` | Added `RECEIVE_BOOT_COMPLETED` permission + exported `.BootReceiver` with BOOT_COMPLETED intent filter (after `.DataProvider` block) |
-| `app/src/main/java/dev/codex/deviceprivy/MainActivity.kt` | `pushConfigToSystemProperties()` now builds the prop map (fieldKeys + `setting_debug_log` + `setting_hide_self` + hookBoxes) and delegates to `Bridge` |
-| `app/src/main/java/dev/codex/deviceprivy/XposedEntry.kt` | #1 gate completed: `hookSystemProperties`, `hookJavaSystemProperties`, `hookLocaleAndTimezone`, `hookPackageManager`, `deferredAntiXposed` behind `safeMode`; compat getters (`hookUserAgent`, `hookLocation`/`hookFused`/`hookLive`) stay unconditional |
-| `app/src/main/java/dev/codex/deviceprivy/IdentityData.kt` | **New (#4).** Pure-Kotlin `TAC_POOLS` (107 verified 8-digit IMEI TACs across 13 manufacturers) + `OUI_POOLS` (1,934 verified IEEE MAC OUIs, same 13) |
-| `app/src/main/java/dev/codex/deviceprivy/FakeData.kt` | `generateValidIMEI(manufacturer)` now pulls the 8-digit TAC from the verified pool + 6-digit serial + Luhn digit; `randomMac(manufacturer)` emits `XX:XX:XX:YY:YY:YY` using a verified OUI; `generateAll()` threads `device.manufacturer` through all three MACs + IMEI |
-| `app/src/main/java/dev/codex/deviceprivy/ProfileCoherence.kt` | **New (#4).** `issues(profile)` / `isCoherent(profile)`: 12 cross-field checks (brand↔mfgr, model↔name, board↔codename, fingerprint fmt+prefix, TAC∈pool, OUIs∈pool, battery scale, MCC↔country, locale↔country, timezone↔country, phone prefix↔country, IMSI↔operator); blank always allowed |
-| `app/src/test/java/dev/codex/deviceprivy/FakeDataTest.kt` | IMEI test now asserts 15-digit + Luhn + TAC∈pool; MAC test asserts global/unicast + OUI∈pool; new `generatedMacsUseVerifiedOuiPools` |
-| `app/src/test/java/dev/codex/deviceprivy/ProfileCoherenceTest.kt` | **New (#4).** 2,000-iteration `generatedProfilesAreAlwaysCoherent` + 13 deterministic contradiction tests + `blankFieldsAreAllowed` |
+| `app/src/main/java/dev/hexhydra/MainActivity.kt` | `pushConfigToSystemProperties()` now builds the prop map (fieldKeys + `setting_debug_log` + `setting_hide_self` + hookBoxes) and delegates to `Bridge` |
+| `app/src/main/java/dev/hexhydra/XposedEntry.kt` | #1 gate completed: `hookSystemProperties`, `hookJavaSystemProperties`, `hookLocaleAndTimezone`, `hookPackageManager`, `deferredAntiXposed` behind `safeMode`; compat getters (`hookUserAgent`, `hookLocation`/`hookFused`/`hookLive`) stay unconditional |
+| `app/src/main/java/dev/hexhydra/IdentityData.kt` | **New (#4).** Pure-Kotlin `TAC_POOLS` (107 verified 8-digit IMEI TACs across 13 manufacturers) + `OUI_POOLS` (1,934 verified IEEE MAC OUIs, same 13) |
+| `app/src/main/java/dev/hexhydra/FakeData.kt` | `generateValidIMEI(manufacturer)` now pulls the 8-digit TAC from the verified pool + 6-digit serial + Luhn digit; `randomMac(manufacturer)` emits `XX:XX:XX:YY:YY:YY` using a verified OUI; `generateAll()` threads `device.manufacturer` through all three MACs + IMEI |
+| `app/src/main/java/dev/hexhydra/ProfileCoherence.kt` | **New (#4).** `issues(profile)` / `isCoherent(profile)`: 12 cross-field checks (brand↔mfgr, model↔name, board↔codename, fingerprint fmt+prefix, TAC∈pool, OUIs∈pool, battery scale, MCC↔country, locale↔country, timezone↔country, phone prefix↔country, IMSI↔operator); blank always allowed |
+| `app/src/test/java/dev/hexhydra/FakeDataTest.kt` | IMEI test now asserts 15-digit + Luhn + TAC∈pool; MAC test asserts global/unicast + OUI∈pool; new `generatedMacsUseVerifiedOuiPools` |
+| `app/src/test/java/dev/hexhydra/ProfileCoherenceTest.kt` | **New (#4).** 2,000-iteration `generatedProfilesAreAlwaysCoherent` + 13 deterministic contradiction tests + `blankFieldsAreAllowed` |
 | `app/build.gradle` | Bumped versionCode 66 -> 67, versionName `3.9.1` -> `3.9.2` |
 | `CHANGELOG.md` | Added v3.9.2 entry (reboot persistence; see below for #4 additions) |
 | `HANDOFF.md` | Updated version, source layout, smoke test, and file lists |
@@ -251,8 +251,8 @@ generators, and the ProfileCoherence validator (41/41 tests passing).
 
 | File | Change |
 |---|---|
-| `app/src/main/java/dev/codex/deviceprivy/MainActivity.kt` | `buildGroupSection`: removed `if (isExpanded) populateFields(...)` guard - always populate |
-| `app/src/main/java/dev/codex/deviceprivy/XposedEntry.kt` | Removed `SKIP_PACKAGES` field and the skip check in `handleLoadPackage` |
+| `app/src/main/java/dev/hexhydra/MainActivity.kt` | `buildGroupSection`: removed `if (isExpanded) populateFields(...)` guard - always populate |
+| `app/src/main/java/dev/hexhydra/XposedEntry.kt` | Removed `SKIP_PACKAGES` field and the skip check in `handleLoadPackage` |
 | `app/build.gradle` | Bumped versionCode 64 -> 65, versionName `3.8.12-FINAL-SKIP` -> `3.9.0` |
 | `CHANGELOG.md` | Added v3.9.0 entry |
 | `HANDOFF.md` | Created this file |
@@ -261,10 +261,10 @@ generators, and the ProfileCoherence validator (41/41 tests passing).
 
 ## Open Items
 
-- **Chamet spoofing**: requires upstream fix in Vector/LSPosed. Not actionable on DevicePrivy side.
+- **Chamet spoofing**: requires upstream fix in Vector/LSPosed. Not actionable on HexHydra side.
 - **Physical reboot test**: boot re-push verified via root broadcast of BOOT_COMPLETED; a real reboot has not been run yet (disruptive).
 - **Runtime skip list**: if user later wants UI-controlled per-package skipping, expose `SKIP_PACKAGES` via SharedPreferences, read in `handleLoadPackage`.
-- **LSPatch sig bypass for antsec**: out of scope for DevicePrivy.
+- **LSPatch sig bypass for antsec**: out of scope for HexHydra.
 
 ---
 
@@ -275,5 +275,5 @@ $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot"
 $env:ANDROID_HOME = "C:\Users\iamro\AppData\Local\Android\Sdk"
 & adb devices
 & adb install -r "C:\Users\iamro\OneDrive\Desktop\gemini cli\DevicePrivacyLab\app\build\outputs\apk\debug\app-debug.apk"
-& adb shell am start -n dev.codex.deviceprivy/dev.codex.deviceprivy.MainActivity
+& adb shell am start -n dev.hexhydra/dev.hexhydra.MainActivity
 ```

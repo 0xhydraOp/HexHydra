@@ -16,7 +16,7 @@ def releaseKeyPassword = keystoreProps.getProperty("RELEASE_KEY_PASSWORD", Syste
 def releaseKeyAlias = keystoreProps.getProperty("RELEASE_KEY_ALIAS", System.getenv("RELEASE_KEY_ALIAS") ?: "deviceprivacylab")
 
 android {
-    namespace "dev.codex.deviceprivy"
+    namespace "dev.hexhydra"
     compileSdk 35
 
     buildFeatures {
@@ -24,7 +24,7 @@ android {
     }
 
     defaultConfig {
-        applicationId "dev.codex.deviceprivy"
+        applicationId "dev.hexhydra"
         minSdk 27
         targetSdk 33
         versionCode 67

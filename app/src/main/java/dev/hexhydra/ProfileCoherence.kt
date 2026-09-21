@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 /**
  * Cross-field coherence checks for a generated or user-entered profile.

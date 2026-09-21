@@ -1,4 +1,4 @@
-﻿package dev.codex.deviceprivy
+﻿package dev.hexhydra
 
 /**
  * Verified per-manufacturer identity pools.

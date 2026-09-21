@@ -1,4 +1,4 @@
-package dev.codex.deviceprivy
+package dev.hexhydra
 
 /**
  * Pure-Kotlin field validation for user-entered spoof values.

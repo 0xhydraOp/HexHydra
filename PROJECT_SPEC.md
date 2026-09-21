@@ -1,7 +1,7 @@
-# Project Specification: DevicePrivy v3.8.5-FIX
+# Project Specification: HexHydra v3.8.5-FIX
 
 ## Project Overview
-DevicePrivy is an advanced Android privacy tool implemented as an LSPosed/Xposed module. It allows users to intercept and spoof sensitive device identifiers at the system API level, protecting user privacy and enabling advanced anti-detection testing.
+HexHydra is an advanced Android privacy tool implemented as an LSPosed/Xposed module. It allows users to intercept and spoof sensitive device identifiers at the system API level, protecting user privacy and enabling advanced anti-detection testing.
 
 ## Technical Architecture
 - **Hooking Engine**: Xposed Framework (via LSPosed + Zygisk/Vector).
