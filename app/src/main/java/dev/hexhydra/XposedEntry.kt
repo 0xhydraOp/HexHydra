@@ -480,11 +480,14 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                 }
             }
             sb.append("setprop hexhydra.refreshed '${System.currentTimeMillis()}'")
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", sb.toString()))
-            process.waitFor()
-            if (process.exitValue() == 0) {
-                lastSysPropRefresh = System.currentTimeMillis()
-                XposedBridge.log("HexHydra: SystemProperties written via setprop (${cachedValues.size} values)")
+            val su = Bridge.locateSu()
+            if (su != null) {
+                val process = Runtime.getRuntime().exec(arrayOf(su, "-c", sb.toString()))
+                process.waitFor()
+                if (process.exitValue() == 0) {
+                    lastSysPropRefresh = System.currentTimeMillis()
+                    XposedBridge.log("HexHydra: SystemProperties written via setprop (${cachedValues.size} values)")
+                }
             }
         } catch (e: Throwable) {
             // Fallback: try JSON file (may still fail on strict SELinux)

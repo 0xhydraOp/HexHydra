@@ -992,29 +992,8 @@ class MainActivity : Activity() {
 
     // ========== Soft Reboot ==========
 
-    private fun locateSu(): String? {
-        val candidates = listOf(
-            "/sbin/su", "/system/bin/su", "/system/xbin/su",
-            "/system_ext/bin/su", "/vendor/bin/su", "/vendor/xbin/su",
-            "/odm/bin/su", "/data/local/bin/su", "/data/local/xbin/su",
-            "/su/bin/su", "/debug_ramdisk/su"
-        )
-        for (path in candidates) {
-            if (File(path).canExecute()) return path
-        }
-        // Fallback: shell PATH lookup (works even when `which` is absent).
-        return try {
-            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "command -v su 2>/dev/null || which su 2>/dev/null"))
-            val line = p.inputStream.bufferedReader().readLine()?.trim()
-            p.waitFor()
-            line?.takeIf { it.isNotBlank() }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     private fun hasRoot(): Boolean {
-        val su = locateSu() ?: return false
+        val su = Bridge.locateSu() ?: return false
         return try {
             val p = Runtime.getRuntime().exec(arrayOf(su, "-c", "id"))
             val out = p.inputStream.bufferedReader().readText()
@@ -1026,7 +1005,7 @@ class MainActivity : Activity() {
     }
 
     private fun softReboot() {
-        val su = locateSu()
+        val su = Bridge.locateSu()
         if (su == null) {
             Toast.makeText(this, "Root (su) not found — grant root to HexHydra in Magisk, then retry.", Toast.LENGTH_LONG).show()
             return
@@ -1044,7 +1023,7 @@ class MainActivity : Activity() {
     }
 
     private fun doSoftReboot() {
-        val su = locateSu() ?: run {
+        val su = Bridge.locateSu() ?: run {
             Toast.makeText(this, "Root (su) not found.", Toast.LENGTH_LONG).show()
             return
         }

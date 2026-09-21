@@ -129,7 +129,6 @@ internal fun XposedEntry.hookSensors(classLoader: ClassLoader) {
                         val vendor = sensorVendorFor(getValue("manufacturer"))
                         try {
                             XposedHelpers.setObjectField(sensor, "mVendor", vendor)
-                            XposedHelpers.setObjectField(sensor, "mStringType", vendor)
                         } catch (e: Throwable) {}
                     }
                 })

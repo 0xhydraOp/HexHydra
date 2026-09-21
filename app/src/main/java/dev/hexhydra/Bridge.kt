@@ -1,5 +1,7 @@
 package dev.hexhydra
 
+import java.io.File
+
 /**
  * Cross-process bridge used by both the UI (on Save) and the boot receiver.
  *
@@ -55,10 +57,30 @@ object Bridge {
         return sb.toString()
     }
 
-    /** Push the given key/value map to `hexhydra.*` system properties. */
+    /** Locate `su` by probing the usual absolute paths, with a shell PATH fallback. */
+    fun locateSu(): String? {
+        val candidates = listOf(
+            "/sbin/su", "/system/bin/su", "/system/xbin/su",
+            "/system_ext/bin/su", "/vendor/bin/su", "/vendor/xbin/su",
+            "/odm/bin/su", "/data/local/bin/su", "/data/local/xbin/su",
+            "/su/bin/su", "/debug_ramdisk/su"
+        )
+        for (path in candidates) {
+            if (File(path).canExecute()) return path
+        }
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "command -v su 2>/dev/null || which su 2>/dev/null"))
+            val line = p.inputStream.bufferedReader().readLine()?.trim()
+            p.waitFor()
+            line?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) { null }
+    }
+
+    /** Push the given key/value map to `hexhydra.*` system properties via an absolute-path `su`. */
     fun pushToSystemProperties(values: Map<String, String>) {
+        val su = locateSu() ?: return
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("su", "-c", buildPushScript(values)))
+            val process = Runtime.getRuntime().exec(arrayOf(su, "-c", buildPushScript(values)))
             process.waitFor()
         } catch (_: Throwable) {}
     }

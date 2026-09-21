@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.9.3 (2026-09-22)
+- **Fix: bare `su` in the cross-process bridge.** `Bridge.pushToSystemProperties()`
+  and `XposedEntry.writeSharedFile()` invoked `su` by bare name and relied on
+  PATH. On stock ROMs (confirmed on Nothing OS / Magisk 30.7) `su` exists only
+  at `/system_ext/bin/su` and is absent from the app's PATH, so the Save-time
+  property push and the boot-time re-push silently did nothing. A new
+  `Bridge.locateSu()` probes the standard absolute paths (with a `sh -c` PATH
+  fallback), and every caller — Bridge, `BootReceiver`, the Activity's
+  root/soft-reboot path, and the zygote shared-file writer — now resolves `su`
+  through it. Same bug class fixed for Soft Reboot in v3.9.2, now closed for
+  the bridge.
+- **Fix: sensor type-string corruption.** `hookSensors()` overwrote the
+  sensor's `mStringType` (e.g. `android.sensor.accelerometer`) with the spoofed
+  vendor name, corrupting `Sensor.getStringType()`. Vendor spoofing now writes
+  `mVendor` only.
+- **Refactor:** `Bridge.locateSu()` is the single su-resolution point; the
+  duplicated root lookup in `MainActivity` was removed in favor of it.
+- **Tests:** 41/41 unit tests pass; debug APK builds.
+- VersionCode: 68
+
 ## v3.9.2 (2026-09-21)
 - **Developer-tool polish (#4):** generated data is now brand-plausible and
   internally consistent.

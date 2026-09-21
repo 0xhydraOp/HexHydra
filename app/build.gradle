@@ -27,8 +27,8 @@ android {
         applicationId "dev.hexhydra"
         minSdk 27
         targetSdk 33
-        versionCode 67
-        versionName "3.9.2"
+        versionCode 68
+        versionName "3.9.3"
     }
 
     signingConfigs {
