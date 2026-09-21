@@ -992,15 +992,47 @@ class MainActivity : Activity() {
 
     // ========== Soft Reboot ==========
 
-    private fun hasRoot(): Boolean = try {
-        Runtime.getRuntime().exec("which su").waitFor() == 0
-    } catch (_: Exception) {
-        false
+    private fun locateSu(): String? {
+        val candidates = listOf(
+            "/sbin/su", "/system/bin/su", "/system/xbin/su",
+            "/system_ext/bin/su", "/vendor/bin/su", "/vendor/xbin/su",
+            "/odm/bin/su", "/data/local/bin/su", "/data/local/xbin/su",
+            "/su/bin/su", "/debug_ramdisk/su"
+        )
+        for (path in candidates) {
+            if (File(path).canExecute()) return path
+        }
+        // Fallback: shell PATH lookup (works even when `which` is absent).
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf("sh", "-c", "command -v su 2>/dev/null || which su 2>/dev/null"))
+            val line = p.inputStream.bufferedReader().readLine()?.trim()
+            p.waitFor()
+            line?.takeIf { it.isNotBlank() }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun hasRoot(): Boolean {
+        val su = locateSu() ?: return false
+        return try {
+            val p = Runtime.getRuntime().exec(arrayOf(su, "-c", "id"))
+            val out = p.inputStream.bufferedReader().readText()
+            p.waitFor()
+            out.contains("uid=0")
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun softReboot() {
+        val su = locateSu()
+        if (su == null) {
+            Toast.makeText(this, "Root (su) not found — grant root to HexHydra in Magisk, then retry.", Toast.LENGTH_LONG).show()
+            return
+        }
         if (!hasRoot()) {
-            Toast.makeText(this, "Root (su) not available — soft reboot needs root.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Root denied — open Magisk\u2192Superuser and allow HexHydra.", Toast.LENGTH_LONG).show()
             return
         }
         AlertDialog.Builder(this)
@@ -1012,14 +1044,18 @@ class MainActivity : Activity() {
     }
 
     private fun doSoftReboot() {
+        val su = locateSu() ?: run {
+            Toast.makeText(this, "Root (su) not found.", Toast.LENGTH_LONG).show()
+            return
+        }
         try {
-            val process = Runtime.getRuntime().exec("su")
-            val os = process.outputStream
-            os.write("killall -9 system_server\n".toByteArray())
-            os.write("exit\n".toByteArray())
-            os.flush()
-            os.close()
-            process.waitFor()
+            val process = Runtime.getRuntime().exec(arrayOf(su, "-c", "killall -9 system_server"))
+            val exit = process.waitFor()
+            if (exit != 0) {
+                val err = process.errorStream.bufferedReader().readText().trim()
+                Toast.makeText(this, "Soft reboot failed (exit $exit): $err", Toast.LENGTH_LONG).show()
+                return
+            }
             Toast.makeText(this, "Soft reboot triggered — system will restart in ~15s.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Soft reboot failed: ${e.message}", Toast.LENGTH_LONG).show()
