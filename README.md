@@ -1,7 +1,7 @@
 # HexHydra
 
 [![Build](https://github.com/0xhydraOp/HexHydra/actions/workflows/build.yml/badge.svg)](https://github.com/0xhydraOp/HexHydra/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/version-v3.9.4-blue)](https://github.com/0xhydraOp/HexHydra/releases/tag/v3.9.4)
+[![Version](https://img.shields.io/badge/version-v3.9.5-blue)](https://github.com/0xhydraOp/HexHydra/releases/tag/v3.9.5)
 [![Platform](https://img.shields.io/badge/platform-Android%2015%20%7C%20LSPosed-green)]()
 [![License](https://img.shields.io/badge/license-approval--required-lightgrey)](LICENSE)
 
@@ -224,7 +224,7 @@ Release credentials are **never committed**. Provide them via `local.properties`
 
 ## Versioning
 
-`versionCode` + `versionName` in `app/build.gradle` are the source of truth; `CHANGELOG.md` records every release. Current: **v3.9.4** (versionCode 69).
+`versionCode` + `versionName` in `app/build.gradle` are the source of truth; `CHANGELOG.md` records every release. Current: **v3.9.5** (versionCode 70).
 
 ## License
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.9.5 (2026-09-22)
+- **UI: sticky action bar.** `Randomize` + `Save` are pinned in a bottom bar
+  (with elevation) so they stay reachable on long screens; `Soft Reboot`
+  remains in the Actions panel. A dirty indicator (`● Unsaved changes` /
+  `✓ All saved`) tracks edits, restores, imports and saves.
+- **UI: coherence line on the profile card.** Read-only use of the existing
+  `ProfileCoherence` validator: `✓ Profile coherent` or
+  `⚠ N issues — tap to view` with a details dialog. Updates live per keystroke.
+- **UI: tappable status badge.** Opens the activation checklist when inactive
+  (LSPosed → enable → scope → soft reboot); status area now also shows the
+  last bridge-push result (`✓`/`✗ failed` + time), refreshed right after Save.
+- **UI: field-editor navigation.** Expand all / Collapse all toggles,
+  per-group `⚠` validity badges that update live, and auto-scroll to the
+  first invalid field on failed Save.
+- UI-only: no changes to prefs, props, bridge protocol, hooks or data logic.
+- **Tests:** 43/43 unit tests pass; debug APK builds.
+- VersionCode: 70
+
 ## v3.9.4 (2026-09-22)
 - **Fix: long values (notably `user_agent`) now survive the prop bridge.**
   Android caps a property value at ~91 bytes; the generated UA (~137 chars)

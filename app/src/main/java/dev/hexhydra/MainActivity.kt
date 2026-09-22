@@ -81,6 +81,14 @@ class MainActivity : Activity() {
     private lateinit var debugLogging: CheckBox
     private lateinit var hideSelf: CheckBox
     private val hookBoxes = mutableMapOf<String, CheckBox>()
+    private lateinit var mainScroll: ScrollView
+    private var stickySaveBtn: Button? = null
+    private lateinit var dirtyText: TextView
+    private lateinit var coherenceText: TextView
+    private var lastPushOk: Boolean? = null
+    private var lastPushAt: Long = 0L
+    private val groupBadges = mutableMapOf<Int, TextView>()
+    private val keyToGroupIndex = groups.flatMapIndexed { index, group -> group.keys.map { it to index } }.toMap()
 
     private val hookGroups = listOf(
         "hook_device" to "Device identity (Build fields)",
@@ -156,39 +164,48 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         loadValues()
 
-        val scroll = ScrollView(this).apply {
+        mainScroll = ScrollView(this).apply {
             setBackgroundColor(bgColor())
             isFillViewport = true
         }
-        val root = LinearLayout(this).apply {
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(16), dp(16), dp(32))
         }
-        scroll.addView(root)
-        setContentView(scroll)
+        mainScroll.addView(content)
 
-        root.addView(buildHeader())
-        root.addView(spacer(12))
-        root.addView(buildStatusBadge())
+        content.addView(buildHeader())
+        content.addView(spacer(12))
+        content.addView(buildStatusBadge())
         refreshText = TextView(this).apply {
             textSize = 12f
             gravity = Gravity.CENTER
             setTextColor(faintColor())
             setPadding(0, dp(6), 0, 0)
         }
-        root.addView(refreshText)
-        root.addView(spacer(6))
-        root.addView(buildActions())
-        root.addView(spacer(12))
-        root.addView(buildDeviceCard())
-        root.addView(spacer(12))
-        root.addView(buildHistory())
-        root.addView(spacer(12))
-        root.addView(buildSettings())
-        root.addView(spacer(12))
-        root.addView(buildAccordionEditor())
-        root.addView(spacer(8))
-        root.addView(buildFooter())
+        content.addView(refreshText)
+        content.addView(spacer(6))
+        content.addView(buildActions())
+        content.addView(spacer(12))
+        content.addView(buildDeviceCard())
+        content.addView(spacer(12))
+        content.addView(buildHistory())
+        content.addView(spacer(12))
+        content.addView(buildSettings())
+        content.addView(spacer(12))
+        content.addView(buildAccordionEditor())
+        content.addView(spacer(8))
+        content.addView(buildFooter())
+
+        // Sticky action bar: Randomize + Save stay reachable on long screens.
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(bgColor())
+        }
+        root.addView(mainScroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        root.addView(buildStickyBar())
+        setContentView(root)
     }
 
     override fun onResume() {
@@ -207,12 +224,19 @@ class MainActivity : Activity() {
             rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
         if (::refreshText.isInitialized) {
             val refreshed = readRefreshed()
-            refreshText.text = if (refreshed > 0) {
+            val line1 = if (refreshed > 0) {
                 val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                 "Last refreshed: ${sdf.format(Date(refreshed))}"
             } else {
                 "Last refreshed: never (Save pushes to props)"
             }
+            val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+            val line2 = when (lastPushOk) {
+                true -> "Last push: ✓ ${timeFmt.format(Date(lastPushAt))}"
+                false -> "Last push: ✗ failed ${timeFmt.format(Date(lastPushAt))}"
+                null -> "Last push: not yet"
+            }
+            refreshText.text = "$line1\n$line2"
         }
     }
 
@@ -271,6 +295,9 @@ class MainActivity : Activity() {
                 setTextColor(if (active) Color.parseColor("#065F46") else Color.parseColor("#991B1B"))
             }
             addView(statusText)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showStatusDialog() }
         }
     }
 
@@ -281,25 +308,18 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             addView(sectionTitle("Actions"))
 
-            // Randomize — full width, prominent
-            addView(actionButton("🎲  Randomize Profile", Color.parseColor("#2563EB")) {
-                randomizeAll()
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)).apply { bottomMargin = dp(10) })
-
-            // Save + Fast Reboot side by side
-            val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-            lateinit var saveBtn: Button
-            saveBtn = actionButton("💾  Save", Color.parseColor("#059669")) {
-                saveConfig(saveBtn)
-                Toast.makeText(this@MainActivity, "Saved – restart target apps.", Toast.LENGTH_SHORT).show()
-            }
-            row.addView(saveBtn, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
-
-            row.addView(actionButton("🔄  Soft Reboot", Color.parseColor("#DC2626")) {
+            // Randomize + Save live in the sticky bar below; the destructive
+            // reboot stays here, full width.
+            addView(actionButton("🔄  Soft Reboot", Color.parseColor("#DC2626")) {
                 softReboot()
-            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
-
-            addView(row)
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
+            addView(TextView(this@MainActivity).apply {
+                text = "Randomize and Save are pinned in the bar below."
+                textSize = 12f
+                setTextColor(faintColor())
+                gravity = Gravity.CENTER
+                setPadding(0, dp(8), 0, 0)
+            })
         }
     }
 
@@ -351,6 +371,14 @@ class MainActivity : Activity() {
                 setTextColor(faintColor())
                 setPadding(0, dp(6), 0, 0)
             })
+            coherenceText = TextView(this@MainActivity).apply {
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(0, dp(8), 0, 0)
+                isClickable = true
+                isFocusable = true
+            }
+            addView(coherenceText)
 
             refreshSummary()
         }
@@ -492,7 +520,7 @@ class MainActivity : Activity() {
                 setOnClickListener {
                     values.putAll(map)
                     for ((k, et) in inputs) et.setText(map[k].orEmpty())
-                    dirty = true
+                    markDirty(true)
                     refreshSummary()
                     Toast.makeText(this@MainActivity, "Profile restored — press Save to apply.", Toast.LENGTH_SHORT).show()
                 }
@@ -539,7 +567,7 @@ class MainActivity : Activity() {
                         return@setPositiveButton
                     }
                     for ((k, et) in inputs) et.setText(values[k].orEmpty())
-                    dirty = true
+                    markDirty(true)
                     refreshSummary()
                     Toast.makeText(this, "Imported $count fields — press Save to apply.", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
@@ -627,6 +655,40 @@ class MainActivity : Activity() {
                 })
             }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(10) })
 
+            val toggleRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+                setPadding(0, 0, 0, dp(4))
+            }
+            toggleRow.addView(TextView(this@MainActivity).apply {
+                text = "Expand all"
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#2563EB"))
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    expandedGroups.clear()
+                    for (i in groups.indices) expandedGroups.add(i)
+                    refreshAccordion()
+                }
+            })
+            toggleRow.addView(TextView(this@MainActivity).apply {
+                text = "Collapse all"
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.parseColor("#2563EB"))
+                setPadding(dp(10), dp(10), dp(10), dp(10))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    expandedGroups.clear()
+                    refreshAccordion()
+                }
+            })
+            addView(toggleRow)
+
             accordionContainer = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
             }
@@ -659,14 +721,14 @@ class MainActivity : Activity() {
             tag = "header_$index"
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-        header.addView(TextView(this).apply {
-            text = "${group.keys.size}"
+        val badge = TextView(this).apply {
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(textHint())
-            background = rounded(dividerColor(), 999)
             setPadding(dp(10), dp(2), dp(10), dp(2))
-        })
+        }
+        header.addView(badge)
+        groupBadges[index] = badge
+        styleGroupBadge(badge, group)
 
         header.setOnClickListener {
             if (index in expandedGroups) expandedGroups.remove(index)
@@ -747,10 +809,11 @@ class MainActivity : Activity() {
                     override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
                     override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                         values[key] = s?.toString().orEmpty()
-                        dirty = true
+                        markDirty(true)
                         val err = validateField(key, values[key].orEmpty())
                         errorView.text = err.orEmpty()
                         errorView.visibility = if (err == null) View.GONE else View.VISIBLE
+                        refreshGroupBadgeForKey(key)
                         refreshSummary()
                     }
                     override fun afterTextChanged(s: Editable?) = Unit
@@ -802,6 +865,7 @@ class MainActivity : Activity() {
                 val isExpanded = idx in expandedGroups || searchQuery.isNotBlank()
 
                 headerText.text = if (isExpanded) "▾  ${group.title}" else "▸  ${group.title}"
+                groupBadges[idx]?.let { styleGroupBadge(it, group) }
                 content.visibility = if (isExpanded) View.VISIBLE else View.GONE
 
                 if (isExpanded && content.childCount == 0) {
@@ -832,7 +896,7 @@ class MainActivity : Activity() {
         prefs.getString("locked_fields", "").orEmpty()
             .split(",").map { it.trim() }.filter { it in fieldKeys }
             .forEach { lockedKeys.add(it) }
-        dirty = false
+        markDirty(false)
     }
 
     private fun persistLocks() {
@@ -876,7 +940,7 @@ class MainActivity : Activity() {
             refreshSummary()
         }
         Toast.makeText(this, "New profile generated.", Toast.LENGTH_SHORT).show()
-        dirty = true
+        markDirty(true)
     }
 
     private fun refreshSummary() {
@@ -889,6 +953,28 @@ class MainActivity : Activity() {
         // Refresh detail views in the device card
         for (key in listOf("imei", "android_id", "mac_address", "sim_operator")) {
             detailViews[key]?.text = displayValue(key, "\u2014")
+        }
+
+        // Profile coherence, read-only use of the pure validator.
+        if (::coherenceText.isInitialized) {
+            val issues = ProfileCoherence.issues(values)
+            if (issues.isEmpty()) {
+                coherenceText.text = "✓ Profile coherent"
+                coherenceText.setTextColor(Color.parseColor("#065F46"))
+            } else {
+                val n = issues.size
+                coherenceText.text = "⚠ $n coherence issue${if (n == 1) "" else "s"} — tap to view"
+                coherenceText.setTextColor(Color.parseColor("#B45309"))
+            }
+            coherenceText.setOnClickListener {
+                val list = ProfileCoherence.issues(values)
+                if (list.isEmpty()) return@setOnClickListener
+                AlertDialog.Builder(this)
+                    .setTitle("Coherence issues")
+                    .setMessage(list.joinToString("\n\n"))
+                    .setPositiveButton("OK", null)
+                    .show()
+            }
         }
     }
 
@@ -923,12 +1009,15 @@ class MainActivity : Activity() {
             val hooks = HashMap<String, Boolean>()
             for ((key, box) in hookBoxes) hooks[key] = box.isChecked
             val ok = Bridge.pushToSystemProperties(Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks))
+            lastPushOk = ok
+            lastPushAt = System.currentTimeMillis()
             if (ok) {
                 logToLogcat("Bridge props pushed")
             } else {
                 logToLogcat("Bridge push failed (no su or setprop error)")
                 Toast.makeText(this, "Saved locally – root prop push failed; scoped apps keep old values until you retry.", Toast.LENGTH_LONG).show()
             }
+            refreshStatusBadge()
         } catch (e: Exception) {
             logToLogcat("Bridge push failed: ${e.message}")
         }
@@ -945,6 +1034,7 @@ class MainActivity : Activity() {
             val firstKey = invalid.first().first
             groups.forEachIndexed { index, group -> if (firstKey in group.keys) expandedGroups.add(index) }
             refreshAccordion()
+            scrollToField(firstKey)
             return
         }
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -956,7 +1046,7 @@ class MainActivity : Activity() {
 
         val saved = editor.commit()
         if (saved) {
-            dirty = false
+            markDirty(false)
             pushHistory()
             pushConfigToSystemProperties()
             logToLogcat("Config saved via commit()")
@@ -1043,6 +1133,100 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Soft reboot triggered — system will restart in ~15s.", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Soft reboot failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // ========== Sticky bar / dirty state / badges ==========
+
+    private fun markDirty(d: Boolean) {
+        dirty = d
+        refreshDirtyIndicator()
+    }
+
+    private fun refreshDirtyIndicator() {
+        if (::dirtyText.isInitialized) {
+            dirtyText.text = if (dirty) "● Unsaved changes" else "✓ All saved"
+            dirtyText.setTextColor(if (dirty) Color.parseColor("#B45309") else faintColor())
+        }
+        // Save stays enabled even when clean: re-pressing re-pushes props
+        // (needed after a reboot wiped them). The dot carries the state.
+        stickySaveBtn?.let {
+            it.text = if (dirty) "💾  Save ●" else "💾  Save"
+        }
+    }
+
+    private fun buildStickyBar(): View {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(panelColor())
+            elevation = dp(4).toFloat()
+            setPadding(dp(12), dp(8), dp(12), dp(12))
+
+            dirtyText = TextView(this@MainActivity).apply {
+                textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, dp(6))
+            }
+            addView(dirtyText, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT))
+
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            row.addView(actionButton("🎲  Randomize", Color.parseColor("#2563EB")) {
+                randomizeAll()
+            }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(6) })
+            lateinit var save: Button
+            save = actionButton("💾  Save", Color.parseColor("#059669")) {
+                saveConfig(save)
+                Toast.makeText(this@MainActivity, "Saved – restart target apps.", Toast.LENGTH_SHORT).show()
+            }
+            row.addView(save, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(6) })
+            stickySaveBtn = save
+            addView(row)
+            refreshDirtyIndicator()
+        }
+    }
+
+    private fun showStatusDialog() {
+        val active = isModuleActive()
+        AlertDialog.Builder(this)
+            .setTitle(if (active) "Module active" else "Module inactive")
+            .setMessage(if (active)
+                "Spoofing is running. After pressing Save, restart the target apps to apply the new identity."
+            else
+                "The module is not loaded. To activate:\n\n1. Open LSPosed → Modules → enable HexHydra\n2. Tick your target apps in scope\n3. Press Soft Reboot below (or reboot)\n4. Reopen this app — the badge turns green.")
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun groupErrorCount(group: FieldGroup): Int =
+        group.keys.count { validateField(it, values[it].orEmpty()) != null }
+
+    private fun styleGroupBadge(badge: TextView, group: FieldGroup) {
+        val errors = groupErrorCount(group)
+        badge.text = if (errors > 0) "⚠ ${group.keys.size}" else "${group.keys.size}"
+        badge.setTextColor(if (errors > 0) Color.parseColor("#991B1B") else textHint())
+        badge.background = rounded(if (errors > 0) Color.parseColor("#FECACA") else dividerColor(), 999)
+    }
+
+    private fun refreshGroupBadgeForKey(key: String) {
+        val idx = keyToGroupIndex[key] ?: return
+        groupBadges[idx]?.let { styleGroupBadge(it, groups[idx]) }
+    }
+
+    private fun scrollToField(key: String) {
+        val target = inputs[key] ?: return
+        if (!::mainScroll.isInitialized) return
+        mainScroll.post {
+            var y = 0
+            var v: View? = target
+            while (v != null && v != mainScroll) {
+                y += v.top
+                v = v.parent as? View
+            }
+            mainScroll.smoothScrollTo(0, (y - dp(80)).coerceAtLeast(0))
         }
     }
 
