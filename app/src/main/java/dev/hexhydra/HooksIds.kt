@@ -8,8 +8,8 @@ import de.robv.android.xposed.XposedHelpers
 
 internal fun XposedEntry.hookSettings(classLoader: ClassLoader) {
         try {
-            val hook = object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            val hook = object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     val requestedKey = param.args.getOrNull(1) as? String ?: return
                     val fake = when (requestedKey) {
                         "android_id" -> getValue("android_id")
@@ -52,8 +52,8 @@ internal fun XposedEntry.hookSharedPreferences(classLoader: ClassLoader) {
                 "getString",
                 String::class.java,
                 String::class.java,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
+                object : SafeHook() {
+                    override fun onBefore(param: MethodHookParam) {
                         val key = param.args.getOrNull(0) as? String ?: return
                         val fake = when (key) {
                             "market_name", "device_name", "bluetooth_name" -> getValue("device_name")
@@ -82,8 +82,8 @@ internal fun XposedEntry.hookAAID(classLoader: ClassLoader) {
             "com.google.android.gms.ads.identifier.AdvertisingIdClient\$Info",
             classLoader
         )
-        XposedHelpers.findAndHookMethod(infoClass, "getId", object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
+        XposedHelpers.findAndHookMethod(infoClass, "getId", object : SafeHook() {
+            override fun onBefore(param: MethodHookParam) {
                 val aaid = getValue("aaid")
                 if (aaid.isNotEmpty()) param.result = aaid
             }
@@ -96,8 +96,8 @@ internal fun XposedEntry.hookAAID(classLoader: ClassLoader) {
 internal fun XposedEntry.hookGServices(classLoader: ClassLoader) {
         try {
             XposedHelpers.findAndHookMethod("com.google.android.gsf.Gservices", classLoader, "getString",
-                android.content.ContentResolver::class.java, String::class.java, String::class.java, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+                android.content.ContentResolver::class.java, String::class.java, String::class.java, object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     if (param.args[1] == "android_id") {
                         val gsf = getValue("gsf_id")
                         if (gsf.isNotEmpty()) param.result = gsf
@@ -108,8 +108,8 @@ internal fun XposedEntry.hookGServices(classLoader: ClassLoader) {
     }
 
 internal fun XposedEntry.hookContentResolverQueries(classLoader: ClassLoader) {
-    val hook = object : XC_MethodHook() {
-        override fun beforeHookedMethod(param: MethodHookParam) {
+    val hook = object : SafeHook() {
+        override fun onBefore(param: MethodHookParam) {
             try {
                 val uri = param.args.firstOrNull() as? Uri ?: return
                 if (uri.authority != "com.google.android.gsf.gservices") return
@@ -203,8 +203,8 @@ internal fun XposedEntry.hookContentResolverQueries(classLoader: ClassLoader) {
 
 internal fun XposedEntry.hookMediaDrm(classLoader: ClassLoader) {
         try {
-            XposedHelpers.findAndHookMethod("android.media.MediaDrm", classLoader, "getPropertyByteArray", String::class.java, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            XposedHelpers.findAndHookMethod("android.media.MediaDrm", classLoader, "getPropertyByteArray", String::class.java, object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     if (param.args.isNotEmpty() && "deviceUniqueId" == param.args[0]) {
                         val did = getValue("media_drm_id")
                         if (did.isNotEmpty()) {

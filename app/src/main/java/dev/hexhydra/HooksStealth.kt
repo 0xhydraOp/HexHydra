@@ -8,8 +8,8 @@ internal fun XposedEntry.hookPackageManager(classLoader: ClassLoader) {
         if (getValue("setting_hide_self") != "true") return
         try {
             val pmClass = XposedHelpers.findClass("android.app.ApplicationPackageManager", classLoader)
-            val hook = object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
+            val hook = object : SafeHook() {
+                override fun onAfter(param: MethodHookParam) {
                     val list = param.result as? List<*> ?: return
                     val newList = java.util.ArrayList<Any>()
                     for (item in list) {
@@ -71,8 +71,14 @@ internal fun XposedEntry.hookAntiXposed(classLoader: ClassLoader) {
                     !lower.contains("lsposed")) return
 
                 val trace = Thread.currentThread().stackTrace
-                // Skip our own frame (index 0); index 1 is the immediate caller.
-                val callerName = trace.getOrNull(1)?.className.orEmpty()
+                // Find our own hook frame, then inspect the frame that invoked
+                // it. Hard-coding index 1 was fragile: leading machinery frames
+                // (Thread.getStackTrace etc.) vary by ART version and LSPosed
+                // build, so a wrong index could throw CNFE at LSPosed itself
+                // (breaking the module) or let app probes through.
+                val selfName = this.javaClass.name
+                val selfIdx = trace.indexOfFirst { it.className == selfName }
+                val callerName = trace.getOrNull(if (selfIdx >= 0) selfIdx + 1 else 1)?.className.orEmpty()
                 val fromLSPosed = callerName.startsWith("org.lsposed") ||
                                   callerName.startsWith("de.robv.android.xposed")
                 if (fromLSPosed) return  // LSPosed internals — allow.
@@ -102,8 +108,8 @@ internal fun XposedEntry.hookAntiXposed(classLoader: ClassLoader) {
         try {
             XposedHelpers.findAndHookMethod("java.io.FileInputStream", classLoader, "read",
                 ByteArray::class.java, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!,
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
+                object : SafeHook() {
+                    override fun onAfter(param: MethodHookParam) {
                         try {
                             val fis = param.thisObject
                             val path = XposedHelpers.getObjectField(fis, "path") as? String ?: return
@@ -134,9 +140,15 @@ internal fun XposedEntry.hookAntiXposed(classLoader: ClassLoader) {
                             // If we somehow produced a different total length (e.g.,
                             // the original chunk didn't end on a line boundary),
                             // truncate or pad to keep bytesRead stable.
+                            // Lengths must be compared in BYTES, not chars:
+                            // any multibyte char in `content` makes
+                            // newContent.length < its byte length, and copying
+                            // `bytesRead` elements from a shorter array throws
+                            // ArrayIndexOutOfBounds inside the target app.
                             val newContent = sb.toString()
-                            val safeLen = minOf(newContent.length, bytesRead)
-                            System.arraycopy(newContent.toByteArray(Charsets.UTF_8), 0, buf, 0, safeLen)
+                            val newBytes = newContent.toByteArray(Charsets.UTF_8)
+                            val safeLen = minOf(newBytes.size, bytesRead)
+                            System.arraycopy(newBytes, 0, buf, 0, safeLen)
                             if (safeLen < bytesRead) {
                                 for (i in safeLen until bytesRead) buf[i] = ' '.code.toByte()
                             }

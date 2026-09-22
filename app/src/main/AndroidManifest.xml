@@ -20,17 +20,13 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <provider
-            android:name=".DataProvider"
-android:authorities="dev.hexhydra.provider"
-            android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"
@@ -44,6 +40,5 @@ android:authorities="dev.hexhydra.provider"
 
     <queries>
         <package android:name="dev.hexhydra" />
-        <provider android:authorities="dev.hexhydra.provider" />
     </queries>
 </manifest>

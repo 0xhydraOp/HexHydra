@@ -149,20 +149,16 @@ class MainActivity : Activity() {
     }
 
     private fun isModuleActive(): Boolean {
-        // Check SystemProperties for the refresh timestamp
-        try {
+        // Only trust the refresh timestamp pushed by an actually-loaded module.
+        // Deliberately no SharedPreferences fallback: our own prefs always hold
+        // the saved profile, which would report "active" even when the module
+        // is not loaded in any process.
+        return try {
             val spClass = Class.forName("android.os.SystemProperties")
             val getMethod = spClass.getDeclaredMethod("get", String::class.java, String::class.java)
             val refreshed = getMethod.invoke(null, "hexhydra.refreshed", "") as? String ?: ""
-            if (refreshed.isNotEmpty()) return true
-        } catch (_: Throwable) {}
-        // Fallback: check SharedPreferences populated by module
-        try {
-            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val mfr = prefs.getString("manufacturer", "") ?: ""
-            if (mfr.isNotEmpty()) return true
-        } catch (_: Throwable) {}
-        return false
+            refreshed.isNotEmpty()
+        } catch (_: Throwable) { false }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -1058,22 +1054,30 @@ class MainActivity : Activity() {
      * gets the SAME saved identity instead of a fresh random one.
      */
     private fun pushConfigToSystemProperties() {
-        try {
-            val hooks = HashMap<String, Boolean>()
-            for ((key, box) in hookBoxes) hooks[key] = box.isChecked
-            val ok = Bridge.pushToSystemProperties(Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks))
-            lastPushOk = ok
-            lastPushAt = System.currentTimeMillis()
-            if (ok) {
-                logToLogcat("Bridge props pushed")
-            } else {
-                logToLogcat("Bridge push failed (no su or setprop error)")
-                Toast.makeText(this, "Saved locally – root prop push failed; scoped apps keep old values until you retry.", Toast.LENGTH_LONG).show()
+        // su can block (grant prompt) and Bridge.pushToSystemProperties is
+        // timeout-bounded — but it must never run on the main thread.
+        val hooks = HashMap<String, Boolean>()
+        for ((key, box) in hookBoxes) hooks[key] = box.isChecked
+        val propMap = Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks)
+        Thread {
+            val ok = try {
+                Bridge.pushToSystemProperties(propMap)
+            } catch (e: Exception) {
+                logToLogcat("Bridge push failed: ${e.message}")
+                false
             }
-            refreshStatusBadge()
-        } catch (e: Exception) {
-            logToLogcat("Bridge push failed: ${e.message}")
-        }
+            runOnUiThread {
+                lastPushOk = ok
+                lastPushAt = System.currentTimeMillis()
+                if (ok) {
+                    logToLogcat("Bridge props pushed")
+                } else {
+                    logToLogcat("Bridge push failed (no su or setprop error)")
+                    Toast.makeText(this, "Saved locally – root prop push failed; scoped apps keep old values until you retry.", Toast.LENGTH_LONG).show()
+                }
+                refreshStatusBadge()
+            }
+        }.start()
     }
 
     private fun saveConfig(saveButton: Button? = null) {
@@ -1145,7 +1149,10 @@ class MainActivity : Activity() {
         return try {
             val p = Runtime.getRuntime().exec(arrayOf(su, "-c", "id"))
             val out = p.inputStream.bufferedReader().readText()
-            p.waitFor()
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly()
+                return false
+            }
             out.contains("uid=0")
         } catch (_: Exception) {
             false
@@ -1153,40 +1160,59 @@ class MainActivity : Activity() {
     }
 
     private fun softReboot() {
-        val su = Bridge.locateSu()
-        if (su == null) {
-            Toast.makeText(this, "Root (su) not found — grant root to HexHydra in Magisk, then retry.", Toast.LENGTH_LONG).show()
-            return
-        }
-        if (!hasRoot()) {
-            Toast.makeText(this, "Root denied — open Magisk\u2192Superuser and allow HexHydra.", Toast.LENGTH_LONG).show()
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Soft reboot?")
-            .setMessage("This restarts the Android runtime (system_server). The screen will go black for ~15s. Save your work in other apps first.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Reboot") { _, _ -> doSoftReboot() }
-            .show()
+        // Root probing shells out to su and can block on a grant prompt -- never
+        // do it on the main thread.
+        Toast.makeText(this, "Checking root access\u2026", Toast.LENGTH_SHORT).show()
+        Thread {
+            val su = Bridge.locateSu()
+            val granted = su != null && hasRoot()
+            runOnUiThread {
+                if (su == null) {
+                    Toast.makeText(this, "Root (su) not found \u2014 grant root to HexHydra in Magisk, then retry.", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                if (!granted) {
+                    Toast.makeText(this, "Root denied \u2014 open Magisk\u2192Superuser and allow HexHydra.", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("Soft reboot?")
+                    .setMessage("This restarts the Android runtime (system_server). The screen will go black for ~15s. Save your work in other apps first.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Reboot") { _, _ -> doSoftReboot() }
+                    .show()
+            }
+        }.start()
     }
 
     private fun doSoftReboot() {
-        val su = Bridge.locateSu() ?: run {
-            Toast.makeText(this, "Root (su) not found.", Toast.LENGTH_LONG).show()
-            return
-        }
-        try {
-            val process = Runtime.getRuntime().exec(arrayOf(su, "-c", "killall -9 system_server"))
-            val exit = process.waitFor()
-            if (exit != 0) {
-                val err = process.errorStream.bufferedReader().readText().trim()
-                Toast.makeText(this, "Soft reboot failed (exit $exit): $err", Toast.LENGTH_LONG).show()
-                return
+        Thread {
+            val su = Bridge.locateSu()
+            if (su == null) {
+                runOnUiThread { Toast.makeText(this, "Root (su) not found.", Toast.LENGTH_LONG).show() }
+                return@Thread
             }
-            Toast.makeText(this, "Soft reboot triggered — system will restart in ~15s.", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Soft reboot failed: ${e.message}", Toast.LENGTH_LONG).show()
-        }
+            try {
+                val process = Runtime.getRuntime().exec(arrayOf(su, "-c", "killall -9 system_server"))
+                val finished = process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
+                val exit = if (finished) process.exitValue() else -1
+                val err = if (finished && exit != 0) process.errorStream.bufferedReader().readText().trim() else ""
+                runOnUiThread {
+                    if (!finished) {
+                        process.destroyForcibly()
+                        Toast.makeText(this, "Soft reboot timed out (su did not answer).", Toast.LENGTH_LONG).show()
+                    } else if (exit != 0) {
+                        Toast.makeText(this, "Soft reboot failed (exit $exit): $err", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, "Soft reboot triggered \u2014 system will restart in ~15s.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "Soft reboot failed: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
     private fun buildTabBar(): View {

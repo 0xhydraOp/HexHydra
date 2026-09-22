@@ -1,8 +1,6 @@
 package dev.hexhydra
 
-import android.annotation.SuppressLint
 import android.content.Context
-import android.net.Uri
 import de.robv.android.xposed.IXposedHookZygoteInit
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
@@ -15,7 +13,6 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     internal val MODULE_PACKAGE = "dev.hexhydra"
     private val PREFS_NAME = "hexhydra_prefs"
-    private val PROVIDER_URI = Uri.parse("content://$MODULE_PACKAGE.provider")
     
     private var debugEnabled = false
     private val cachedValues = java.util.concurrent.ConcurrentHashMap<String, String>()
@@ -50,7 +47,6 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             XposedBridge.log("HexHydra: initZygote - no prefs data, generating fake defaults")
             cachedValues.putAll(FakeData.generateAll())
         }
-        if (!dataFetched) dataFetched = true
         if (dataFromUserPrefs) writeSharedFile()  // only main zygote with real prefs
         writeToSystemProperties()
         lastSysPropRefresh = System.currentTimeMillis()
@@ -63,8 +59,8 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             try {
                 XposedHelpers.findAndHookMethod(
                     MainActivity::class.java.name, lpparam.classLoader, "isModuleActive",
-                    object : XC_MethodHook() {
-                        override fun beforeHookedMethod(param: MethodHookParam) {
+                    object : SafeHook() {
+                        override fun onBefore(param: MethodHookParam) {
                             param.result = true
                         }
                     }
@@ -109,15 +105,14 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
         try {
             val instrumentationClass = XposedHelpers.findClass("android.app.Instrumentation", lpparam.classLoader)
             XposedHelpers.findAndHookMethod(instrumentationClass, "callApplicationOnCreate",
-                android.app.Application::class.java, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
+                android.app.Application::class.java, object : SafeHook() {
+                    override fun onBefore(param: MethodHookParam) {
                         val app = param.args[0] as? android.app.Application
                         if (app != null) {
                             appContext = app.applicationContext ?: app
                             XposedBridge.log("HexHydra: [${lpparam.packageName}] Application context captured, refreshing data")
                             dataFetched = false
-                            fetchData(appContext)
-                            if (!dataFetched) dataFetched = true
+                            fetchData()
                             // Install deferred anti-detection hooks BEFORE app is fully initialized
                             // (some anti-Xposed checks run inside onCreate).
                             if (deferredAntiXposed && hookEnabled("hook_stealth")) {
@@ -132,7 +127,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                     // (Locale.getDefault, java.lang.System.getProperty,
                     //  SystemProperties.get, Build fields) so they only spoof
                     // after resource loading is done.
-                    override fun afterHookedMethod(param: MethodHookParam) {
+                    override fun onAfter(param: MethodHookParam) {
                         if (!appInitialized) {
                             appInitialized = true
                             // Now safe to set static Build fields — the app has
@@ -202,8 +197,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
         }
     }
 
-    @SuppressLint("Range")
-    private fun fetchData(contextHint: Context? = appContext) {
+    private fun fetchData() {
         fetchAttempts++
         
         synchronized(cachedValues) {
@@ -227,36 +221,6 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                 }
             } catch (e: Throwable) {
                 XposedBridge.log("HexHydra: XSharedPreferences error: ${e.message}")
-            }
-
-            try {
-                val context = contextHint ?: run {
-                    val activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", null)
-                    val activityThread = XposedHelpers.callStaticMethod(activityThreadClass, "currentActivityThread")
-                    if (activityThread != null) {
-                        (XposedHelpers.callMethod(activityThread, "getApplication") as? Context)
-                            ?: (XposedHelpers.callMethod(activityThread, "getSystemContext") as? Context)
-                    } else null
-                }
-                if (context != null) {
-                    val cr = context.contentResolver
-                    cr.query(PROVIDER_URI, null, null, null, null)?.use { cursor ->
-                        if (cursor.count > 0) {
-                            cachedValues.clear()
-                            while (cursor.moveToNext()) {
-                                val key = cursor.getString(cursor.getColumnIndex("key")) ?: continue
-                                val value = cursor.getString(cursor.getColumnIndex("value")) ?: ""
-                                cachedValues[key] = value
-                            }
-                            dataFetched = true
-                            debugEnabled = getValue("setting_debug_log") == "true"
-                            XposedBridge.log("HexHydra: Data updated via ContentProvider (count=${cursor.count})")
-                            return
-                        }
-                    }
-                }
-            } catch (e: Throwable) {
-                if (contextHint != null) XposedBridge.log("HexHydra: ContentProvider update error: ${e.message}")
             }
 
             // Fallback: Shared file (written by main zygote, readable across processes)
@@ -283,8 +247,10 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
     internal fun getValue(key: String): String {
         if (!dataFetched) fetchData()
         val now = System.currentTimeMillis()
-        // Only poll SystemProperties if data did NOT come from user's saved prefs
-        if (dataFetched && !dataFromUserPrefs && now - lastPropPollTime > PROP_POLL_INTERVAL_MS) {
+        // Poll SystemProperties regardless of the original data source: when the
+        // user saves a new config the app pushes fresh props, and scoped
+        // processes must pick them up even if they loaded from XSharedPreferences.
+        if (dataFetched && now - lastPropPollTime > PROP_POLL_INTERVAL_MS) {
             lastPropPollTime = now
             try {
                 val spClass = Class.forName("android.os.SystemProperties")
@@ -344,8 +310,8 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
     internal fun hookMethodRet(className: String, classLoader: ClassLoader, methodName: String, retValKey: String, vararg argTypes: Any) {
         try {
-            val args = arrayOf(*argTypes, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            val args = arrayOf(*argTypes, object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     // Crash-safe: never let a hook callback throw into the
                     // target process's call site. The outer `try` only protects
                     // hook installation — without this inner guard, an
@@ -432,24 +398,29 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             "mac_address", "mac_bssid", "mac_ssid", "bluetooth_mac", "ip_address",
             "latitude", "longitude", "locale", "timezone",
             "screen_width", "screen_height", "screen_density", "user_agent",
-            "user_agent2", "user_agent3",
+            "user_agent2", "user_agent3", "user_agent4",
             "gl_renderer", "gl_vendor", "battery_level", "battery_scale",
             "setting_debug_log", "setting_hide_self",
             "hook_device", "hook_telephony", "hook_network", "hook_location",
             "hook_display", "hook_ids", "hook_ua", "hook_stealth"
         )
 
-        fun sdkVersionToInt(sdkVersion: String): Int = when {
-            sdkVersion.startsWith("16") -> 36
-            sdkVersion.startsWith("15") -> 35
-            sdkVersion.startsWith("14") -> 34
-            sdkVersion.startsWith("13") -> 33
-            sdkVersion.startsWith("12") -> 32
-            sdkVersion.startsWith("11") -> 31
-            sdkVersion.startsWith("10") -> 30
-            sdkVersion.startsWith("9") -> 29
-            sdkVersion.startsWith("8") -> 28
-            else -> 35  // default to Android 15 if unknown
+        fun sdkVersionToInt(sdkVersion: String): Int {
+            // Parse the major release number first: prefix matching is unsafe
+            // ("99".startsWith("9") would mis-map an unknown future release).
+            val major = sdkVersion.substringBefore('.').toIntOrNull() ?: return 35
+            return when (major) {
+                16 -> 36
+                15 -> 35
+                14 -> 34
+                13 -> 33
+                12 -> 31  // Android 12 = 31 (12L = 32; base mapping preferred)
+                11 -> 30
+                10 -> 29
+                9 -> 28
+                8 -> 26   // 8.0 = 26, 8.1 = 27; base mapping preferred
+                else -> 35  // default to Android 15 if unknown
+            }
         }
     }
 
@@ -478,15 +449,13 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             for ((key, value) in cachedValues) {
                 if (value.isNotEmpty() && key in KNOWN_KEYS) filtered[key] = value
             }
-            val script = Bridge.buildPushScript(filtered)
-            val su = Bridge.locateSu()
-            if (su != null) {
-                val process = Runtime.getRuntime().exec(arrayOf(su, "-c", script))
-                process.waitFor()
-                if (process.exitValue() == 0) {
-                    lastSysPropRefresh = System.currentTimeMillis()
-                    XposedBridge.log("HexHydra: SystemProperties written via setprop (${cachedValues.size} values)")
-                }
+            // Delegated to Bridge so this path is also timeout-bounded: a
+            // blocking su prompt must never hang the zygote process.
+            if (Bridge.pushToSystemProperties(filtered)) {
+                lastSysPropRefresh = System.currentTimeMillis()
+                XposedBridge.log("HexHydra: SystemProperties written via setprop (${filtered.size} values)")
+            } else {
+                throw RuntimeException("setprop push failed or timed out")
             }
         } catch (e: Throwable) {
             // Fallback: try JSON file (may still fail on strict SELinux)

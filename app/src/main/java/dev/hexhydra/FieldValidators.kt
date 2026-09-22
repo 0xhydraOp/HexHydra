@@ -38,6 +38,9 @@ object FieldValidators {
             }
             "android_id", "gsf_id" ->
                 if (!v.matches(hex16Regex)) "Must be 16 hex chars" else null
+            "media_drm_id" ->
+                if (!v.matches(Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")))
+                    "Must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)" else null
             "mobile_no" -> if (!v.matches(Regex("^\\+\\d{7,15}$"))) "Format +<country><number>" else null
             else -> null
         }

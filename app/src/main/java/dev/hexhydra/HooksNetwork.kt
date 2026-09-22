@@ -10,8 +10,8 @@ internal fun XposedEntry.hookWifi(classLoader: ClassLoader) {
         hookMethodRet(wi, classLoader, "getSSID", "mac_ssid")
         
         try {
-            XposedHelpers.findAndHookMethod(wi, classLoader, "getIpAddress", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            XposedHelpers.findAndHookMethod(wi, classLoader, "getIpAddress", object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     val ip = getValue("ip_address")
                     if (ip.isNotEmpty()) {
                         val p = ip.split(".")
@@ -32,8 +32,8 @@ internal fun XposedEntry.hookWifi(classLoader: ClassLoader) {
 internal fun XposedEntry.hookWifiDhcp(classLoader: ClassLoader) {
         try {
             XposedHelpers.findAndHookMethod("android.net.wifi.WifiManager", classLoader, "getDhcpInfo",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
+                object : SafeHook() {
+                    override fun onAfter(param: MethodHookParam) {
                         val info = param.result ?: return
                         val ip = getValue("ip_address")
                         if (ip.isEmpty()) return
@@ -61,8 +61,8 @@ internal fun XposedEntry.hookWifiDhcp(classLoader: ClassLoader) {
 
 internal fun XposedEntry.hookNetworkInterface(classLoader: ClassLoader) {
         try {
-            XposedHelpers.findAndHookMethod("java.net.NetworkInterface", classLoader, "getHardwareAddress", object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            XposedHelpers.findAndHookMethod("java.net.NetworkInterface", classLoader, "getHardwareAddress", object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     val mac = getValue("mac_address")
                     if (mac.isNotEmpty() && mac.contains(":")) {
                         try {

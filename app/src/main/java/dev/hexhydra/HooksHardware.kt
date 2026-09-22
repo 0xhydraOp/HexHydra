@@ -14,20 +14,24 @@ internal fun sensorVendorFor(manufacturer: String): String = when {
 }
 
 internal fun XposedEntry.hookDisplay(classLoader: ClassLoader) {
-        val hook = object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                val dm = param.args[0] as DisplayMetrics
-                val w = getValue("screen_width").toIntOrNull()
-                val h = getValue("screen_height").toIntOrNull()
-                val d = getValue("screen_density").toIntOrNull()
-                if (w != null) dm.widthPixels = w
-                if (h != null) dm.heightPixels = h
-                if (d != null) {
-                    dm.densityDpi = d
-                    dm.density = d / 160f
-                    dm.xdpi = d.toFloat()
-                    dm.ydpi = d.toFloat()
-                }
+        val hook = object : SafeHook() {
+            override fun onAfter(param: MethodHookParam) {
+                // Crash-safe: a hook callback must never throw into the target process.
+                try {
+                    val dm = param.args.getOrNull(0) as? DisplayMetrics ?: return
+                    val w = getValue("screen_width").toIntOrNull()
+                    val h = getValue("screen_height").toIntOrNull()
+                    val d = getValue("screen_density").toIntOrNull()
+                    if (w != null) dm.widthPixels = w
+                    if (h != null) dm.heightPixels = h
+                    if (d != null) {
+                        dm.densityDpi = d
+                        dm.density = d / 160f
+                        dm.scaledDensity = d / 160f
+                        dm.xdpi = d.toFloat()
+                        dm.ydpi = d.toFloat()
+                    }
+                } catch (_: Throwable) {}
             }
         }
         try {
@@ -39,8 +43,8 @@ internal fun XposedEntry.hookDisplay(classLoader: ClassLoader) {
     }
 
 internal fun XposedEntry.hookOpenGL(classLoader: ClassLoader) {
-        val hook = object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
+        val hook = object : SafeHook() {
+            override fun onBefore(param: MethodHookParam) {
                 val type = param.args[0] as? Int ?: return
                 if (type == 0x1F00) {
                     val vendor = getValue("gl_vendor")
@@ -57,18 +61,21 @@ internal fun XposedEntry.hookOpenGL(classLoader: ClassLoader) {
 
     // ========== v3.7.5: Battery Scale Fix ==========
 internal fun XposedEntry.hookBattery(classLoader: ClassLoader) {
-        val hook = object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                val filter = param.args.getOrNull(1) as? android.content.IntentFilter ?: return
-                if (filter.hasAction(android.content.Intent.ACTION_BATTERY_CHANGED)) {
-                    val intent = param.result as? android.content.Intent ?: return
-                    val level = getValue("battery_level").toIntOrNull() ?: 85
-                    val scale = getValue("battery_scale").toIntOrNull() ?: 100
-                    val scaledLevel = (level * scale / 100).coerceIn(1, scale)
-                    intent.putExtra("level", scaledLevel)
-                    intent.putExtra("scale", scale)
-                    intent.putExtra("status", 2)
-                }
+        val hook = object : SafeHook() {
+            override fun onAfter(param: MethodHookParam) {
+                // Crash-safe: a hook callback must never throw into the target process.
+                try {
+                    val filter = param.args.getOrNull(1) as? android.content.IntentFilter ?: return
+                    if (filter.hasAction(android.content.Intent.ACTION_BATTERY_CHANGED)) {
+                        val intent = param.result as? android.content.Intent ?: return
+                        val level = getValue("battery_level").toIntOrNull() ?: 85
+                        val scale = getValue("battery_scale").toIntOrNull() ?: 100
+                        val scaledLevel = (level * scale / 100).coerceIn(1, scale)
+                        intent.putExtra("level", scaledLevel)
+                        intent.putExtra("scale", scale)
+                        intent.putExtra("status", 2)
+                    }
+                } catch (_: Throwable) {}
             }
         }
 
@@ -95,8 +102,8 @@ internal fun XposedEntry.hookBattery(classLoader: ClassLoader) {
 
     // ========== v3.7.5: Sensor Spoofing ==========
 internal fun XposedEntry.hookSensors(classLoader: ClassLoader) {
-        val sensorHook = object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
+        val sensorHook = object : SafeHook() {
+            override fun onAfter(param: MethodHookParam) {
                 val sensors = param.result as? List<*> ?: return
                 if (sensors.isEmpty()) return
                 
@@ -105,7 +112,9 @@ internal fun XposedEntry.hookSensors(classLoader: ClassLoader) {
                 for (sensor in sensors) {
                     try {
                         XposedHelpers.setObjectField(sensor, "mVendor", vendor)
-                        XposedHelpers.setObjectField(sensor, "mStringType", vendor)
+                        // mStringType deliberately untouched: writing a vendor
+                        // name into it corrupts Sensor.getStringType() and can
+                        // crash apps that switch on sensor types.
                     } catch (e: Throwable) {}
                 }
                 param.result = sensors
@@ -123,8 +132,8 @@ internal fun XposedEntry.hookSensors(classLoader: ClassLoader) {
         
         try {
             XposedHelpers.findAndHookMethod("android.hardware.SensorManager", classLoader,
-                "getDefaultSensor", Int::class.javaPrimitiveType!!, object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
+                "getDefaultSensor", Int::class.javaPrimitiveType!!, object : SafeHook() {
+                    override fun onAfter(param: MethodHookParam) {
                         val sensor = param.result ?: return
                         val vendor = sensorVendorFor(getValue("manufacturer"))
                         try {

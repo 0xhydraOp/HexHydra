@@ -50,8 +50,8 @@ internal fun XposedEntry.hookSystemProperties(classLoader: ClassLoader) {
     // This protects Chamet's antsec resource lookup during onCreate.
     try {
         val spClass = XposedHelpers.findClass("android.os.SystemProperties", classLoader)
-        val hook = object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
+        val hook = object : SafeHook() {
+            override fun onBefore(param: MethodHookParam) {
                 if (!appInitialized) return
                 val key = param.args[0] as? String ?: return
                 val fake = when {
@@ -94,8 +94,8 @@ internal fun XposedEntry.hookSystemProperties(classLoader: ClassLoader) {
             try { XposedHelpers.findAndHookMethod(spClass, "get", String::class.java, hook) } catch (_: Throwable) {}
             XposedHelpers.findAndHookMethod(spClass, "get", String::class.java, String::class.java, hook)
             try {
-                val intHook = object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
+                val intHook = object : SafeHook() {
+                    override fun onBefore(param: MethodHookParam) {
                         if (!appInitialized) return
                         val key = param.args[0] as? String ?: return
                         if (key.contains("ro.build.version.sdk")) {
@@ -116,8 +116,8 @@ internal fun XposedEntry.hookUserAgent(classLoader: ClassLoader) {
             hookMethodRet("android.webkit.WebSettings", classLoader, "getDefaultUserAgent", "user_agent", Context::class.java)
         } catch (_: Throwable) {}
         try {
-            XposedHelpers.findAndHookMethod("android.webkit.WebView", classLoader, "loadUrl", String::class.java, object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
+            XposedHelpers.findAndHookMethod("android.webkit.WebView", classLoader, "loadUrl", String::class.java, object : SafeHook() {
+                override fun onBefore(param: MethodHookParam) {
                     try {
                         val ua = getValue("user_agent")
                         if (ua.isEmpty()) return
@@ -137,8 +137,8 @@ internal fun XposedEntry.hookJavaSystemProperties(classLoader: ClassLoader) {
     // app's normal operation; only init-time calls pass through to the real
     // implementation.
     try {
-        val hook = object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
+        val hook = object : SafeHook() {
+            override fun onBefore(param: MethodHookParam) {
                 if (!appInitialized) return
                 val key = param.args[0] as? String ?: return
                 val fake = when {

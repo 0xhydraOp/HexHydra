@@ -27,8 +27,8 @@ android {
         applicationId "dev.hexhydra"
         minSdk 27
         targetSdk 33
-        versionCode 71
-        versionName "3.9.6"
+        versionCode 72
+        versionName "3.9.7"
     }
 
     signingConfigs {
@@ -71,4 +71,8 @@ dependencies {
     compileOnly "de.robv.android.xposed:api:82"
     implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.10"
     testImplementation "junit:junit:4.13.2"
+    // Needed on the unit-test classpath so XposedEntry's companion (which
+    // declares XSharedPreferences/XposedBridge-typed fields) can be loaded
+    // by the JVM for the pure sdkVersionToInt() regression test.
+    testImplementation "de.robv.android.xposed:api:82"
 }

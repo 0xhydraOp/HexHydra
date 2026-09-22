@@ -3,6 +3,12 @@ package dev.hexhydra
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers
 
+// A listener CLASS only needs hooking once; every TelephonyManager.listen()
+// call used to re-install the same hooks, stacking duplicate callbacks per
+// app-level registration (wasted hook slots and repeated work per event).
+private val hookedListenerClasses: MutableSet<String> =
+    java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap())
+
 internal fun XposedEntry.hookTelephony(classLoader: ClassLoader) {
         val tm = "android.telephony.TelephonyManager"
         hookMethodRet(tm, classLoader, "getDeviceId", "imei")
@@ -33,15 +39,16 @@ internal fun XposedEntry.hookPhoneStateListener(classLoader: ClassLoader) {
             val tm = "android.telephony.TelephonyManager"
             XposedHelpers.findAndHookMethod(tm, classLoader, "listen",
                 android.telephony.PhoneStateListener::class.java, Int::class.javaPrimitiveType!!,
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        val listener = param.args[0] as? android.telephony.PhoneStateListener ?: return
+                object : SafeHook() {
+                    override fun onBefore(param: MethodHookParam) {
+                        val listener = param.args.getOrNull(0) as? android.telephony.PhoneStateListener ?: return
+                        if (!hookedListenerClasses.add(listener.javaClass.name)) return
                         // Hook onSignalStrengthsChanged on this listener instance
                         try {
                             XposedHelpers.findAndHookMethod(listener.javaClass, "onSignalStrengthsChanged",
                                 android.telephony.SignalStrength::class.java,
-                                object : XC_MethodHook() {
-                                    override fun beforeHookedMethod(p: MethodHookParam) {
+                                object : SafeHook() {
+                                    override fun onBefore(p: MethodHookParam) {
                                         p.result = null // block callback entirely — no signal leak
                                     }
                                 })
@@ -50,8 +57,8 @@ internal fun XposedEntry.hookPhoneStateListener(classLoader: ClassLoader) {
                         try {
                             XposedHelpers.findAndHookMethod(listener.javaClass, "onCellInfoChanged",
                                 java.util.List::class.java,
-                                object : XC_MethodHook() {
-                                    override fun beforeHookedMethod(p: MethodHookParam) {
+                                object : SafeHook() {
+                                    override fun onBefore(p: MethodHookParam) {
                                         p.result = java.util.Collections.emptyList<Any>()
                                     }
                                 })

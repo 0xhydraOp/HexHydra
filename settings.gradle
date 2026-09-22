@@ -11,6 +11,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // de.robv.android.xposed:api:82 is not on Maven Central; this Nexus
+        // mirror proxies it (api.xposed.info is unreachable from some networks).
         maven { url "https://repository-cdn.liferay.com/nexus/content/repositories/gradle-plugins/" }
     }
 }

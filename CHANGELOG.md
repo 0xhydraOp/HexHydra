@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.9.7 (2026-09-23)
+- **Stability: scoped apps must not crash.** All spoof-hook callbacks now run
+  through `SafeHook`, which swallows any `Throwable` so a spoofing edge case
+  can never kill the target app (the anti-Xposed `Class.forName` interceptor
+  deliberately stays throwing, by design).
+- **Fix: sensor type corruption.** `Sensor.mStringType` is no longer
+  overwritten with the vendor string — it broke `Sensor.getStringType()` and
+  crashed apps that switch on sensor types.
+- **Fix: `/proc` rewrite buffer overflow.** Read-chunk rewriting now compares
+  lengths in BYTES (multibyte chars previously caused
+  `ArrayIndexOutOfBoundsException` inside target apps).
+- **Fix: anti-Xposed stack detection.** The `Class.forName` hook locates its
+  own frame dynamically instead of assuming a fixed index — robust across ART
+  / LSPosed builds.
+- **Fix: `PhoneStateListener` hook accumulation.** Each listener class is now
+  hooked once (concurrent set dedupe) instead of stacking hooks per
+  `TelephonyManager.listen()` call.
+- **Fix: SDK int mapping.** Android 12 → 31, 11 → 30, 10 → 29, 9 → 28, 8 → 26
+  (base mappings; previously off by one, breaking `Build.VERSION` coherence).
+- **Fix: prop polling always on.** Scoped processes poll SystemProperties
+  regardless of initial data source, so new configs propagate live.
+- **Bridge: su path cached, su calls timeout-bounded** (15 s) so a blocking
+  Magisk grant prompt can never hang the app or the zygote; chunk limit
+  raised to 4 for long user agents; `reassembleSplitValue` loops generically.
+- **Removed dead `DataProvider`** (class, manifest entry, and the hook-side
+  ContentProvider fetch path) — `XSharedPreferences` + SystemProperties cover
+  all data flow; also fixes boot-time `isModuleActive()` and moves root ops
+  off the main thread; `BootReceiver` uses `goAsync()`.
+- **Misc:** `scaledDensity` spoofed alongside `density`; `media_drm_id`
+  validated as UUID; activity survives rotation (`configChanges`); removed
+  unused Liferay repo from `settings.gradle`.
+- VersionCode: 72
+
 ## v3.9.6 (2026-09-22)
 - **UI: tabbed home.** Dashboard / Fields / Settings tabs replace the single
   long scroll: Dashboard holds status + device profile + history; Fields holds

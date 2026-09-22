@@ -1,6 +1,7 @@
 package dev.hexhydra
 
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * Cross-process bridge used by both the UI (on Save) and the boot receiver.
@@ -48,7 +49,8 @@ object Bridge {
      */
     const val PROP_CHUNK_SIZE = 80
     private val SPLIT_KEYS = setOf("user_agent")
-    private const val MAX_CHUNKS = 3
+    // 4 chunks x 80 chars = 320 — headroom for long custom user agents.
+    private const val MAX_CHUNKS = 4
 
     /** Expand splittable long values into chunked entries. Pure, unit-tested. */
     fun expandForProps(values: Map<String, String>): Map<String, String> {
@@ -71,10 +73,12 @@ object Bridge {
         return out
     }
 
-    /** Rejoin chunked entries (`key` + `key2` + `key3`). Pure, unit-tested. */
+    /** Rejoin chunked entries (`key` + `key2` + … up to MAX_CHUNKS). Pure, unit-tested. */
     fun reassembleSplitValue(values: Map<String, String>, key: String): String {
         val first = values[key]?.takeIf { it.isNotEmpty() } ?: return ""
-        return first + values[key + "2"].orEmpty() + values[key + "3"].orEmpty()
+        val sb = StringBuilder(first)
+        for (i in 2..MAX_CHUNKS) sb.append(values[key + i].orEmpty())
+        return sb.toString()
     }
 
     /**
@@ -94,8 +98,20 @@ object Bridge {
         return sb.toString()
     }
 
+    /** Probe result is cached: su's location never changes during a process lifetime. */
+    @Volatile private var cachedSuPath: String? = null
+    @Volatile private var suProbed = false
+
     /** Locate `su` by probing the usual absolute paths, with a shell PATH fallback. */
     fun locateSu(): String? {
+        if (suProbed) return cachedSuPath
+        val found = locateSuUncached()
+        cachedSuPath = found
+        suProbed = true
+        return found
+    }
+
+    private fun locateSuUncached(): String? {
         val candidates = listOf(
             "/sbin/su", "/system/bin/su", "/system/xbin/su",
             "/system_ext/bin/su", "/vendor/bin/su", "/vendor/xbin/su",
@@ -118,12 +134,21 @@ object Bridge {
      * absolute-path `su`. Returns true only when `su` was found and the
      * `setprop` script exited 0, so callers can surface failures instead of
      * silently doing nothing.
+     *
+     * Bounded by [SU_TIMEOUT_SECONDS]: if su blocks (e.g. a Magisk grant
+     * prompt nobody answers) the process is killed instead of hanging the
+     * caller forever. Callers MUST invoke this off the main thread.
      */
+    private const val SU_TIMEOUT_SECONDS = 15L
+
     fun pushToSystemProperties(values: Map<String, String>): Boolean {
         val su = locateSu() ?: return false
         return try {
             val process = Runtime.getRuntime().exec(arrayOf(su, "-c", buildPushScript(values)))
-            process.waitFor()
+            if (!process.waitFor(SU_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                return false
+            }
             process.exitValue() == 0
         } catch (_: Throwable) {
             false
