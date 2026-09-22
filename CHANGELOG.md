@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.9.6 (2026-09-22)
+- **UI: tabbed home.** Dashboard / Fields / Settings tabs replace the single
+  long scroll: Dashboard holds status + device profile + history; Fields holds
+  the editor; Settings holds module options, actions and data transfer. The
+  landing screen is short by default.
+- **UI: compact geeky header.** Smaller icon, mono `vX·build` chip, inline
+  live status dot; section titles uppercase with tracking; status lines in
+  monospace.
+- **UI: data transfer moved.** Export/Import row moved from History to a
+  Settings panel; History keeps the snapshot list.
+- UI-only: prefs, props, bridge protocol, hooks and data logic untouched.
+- **Tests:** 43/43 unit tests pass; debug APK builds.
+- VersionCode: 71
+
 ## v3.9.5 (2026-09-22)
 - **UI: sticky action bar.** `Randomize` + `Save` are pinned in a bottom bar
   (with elevation) so they stay reachable on long screens; `Soft Reboot`

@@ -89,6 +89,11 @@ class MainActivity : Activity() {
     private var lastPushAt: Long = 0L
     private val groupBadges = mutableMapOf<Int, TextView>()
     private val keyToGroupIndex = groups.flatMapIndexed { index, group -> group.keys.map { it to index } }.toMap()
+    private val tabTitles = listOf("DASHBOARD", "FIELDS", "SETTINGS")
+    private val tabButtons = mutableListOf<TextView>()
+    private var tabPages: List<LinearLayout> = emptyList()
+    private var selectedTab = 0
+    private var headerDot: View? = null
 
     private val hookGroups = listOf(
         "hook_device" to "Device identity (Build fields)",
@@ -175,27 +180,53 @@ class MainActivity : Activity() {
         mainScroll.addView(content)
 
         content.addView(buildHeader())
-        content.addView(spacer(12))
-        content.addView(buildStatusBadge())
+        content.addView(spacer(10))
+        content.addView(buildTabBar())
+        content.addView(spacer(10))
+
+        // Dashboard: status + identity + history. Short by design.
+        val dashPage = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        dashPage.addView(buildStatusBadge())
         refreshText = TextView(this).apply {
-            textSize = 12f
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
             gravity = Gravity.CENTER
             setTextColor(faintColor())
             setPadding(0, dp(6), 0, 0)
         }
-        content.addView(refreshText)
-        content.addView(spacer(6))
-        content.addView(buildActions())
-        content.addView(spacer(12))
-        content.addView(buildDeviceCard())
-        content.addView(spacer(12))
-        content.addView(buildHistory())
-        content.addView(spacer(12))
-        content.addView(buildSettings())
-        content.addView(spacer(12))
-        content.addView(buildAccordionEditor())
-        content.addView(spacer(8))
-        content.addView(buildFooter())
+        dashPage.addView(refreshText)
+        dashPage.addView(spacer(6))
+        dashPage.addView(buildDeviceCard())
+        dashPage.addView(spacer(12))
+        dashPage.addView(buildHistory())
+        content.addView(dashPage)
+
+        // Fields: the editor gets its own dedicated space.
+        val fieldsPage = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        fieldsPage.addView(buildAccordionEditor())
+        content.addView(fieldsPage)
+
+        // Settings: options, actions, data transfer, footer.
+        val settingsPage = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        settingsPage.addView(buildSettings())
+        settingsPage.addView(spacer(12))
+        settingsPage.addView(buildActions())
+        settingsPage.addView(spacer(12))
+        settingsPage.addView(buildDataTransfer())
+        settingsPage.addView(spacer(8))
+        settingsPage.addView(buildFooter())
+        content.addView(settingsPage)
+
+        tabPages = listOf(dashPage, fieldsPage, settingsPage)
+        selectTab(0)
 
         // Sticky action bar: Randomize + Save stay reachable on long screens.
         val root = LinearLayout(this).apply {
@@ -221,6 +252,8 @@ class MainActivity : Activity() {
         val badge = statusText.parent as? LinearLayout ?: return
         badge.background = rounded(if (active) Color.parseColor("#ECFDF5") else Color.parseColor("#FEF2F2"), 12)
         badge.getChildAt(0)?.background =
+            rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
+        headerDot?.background =
             rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
         if (::refreshText.isInitialized) {
             val refreshed = readRefreshed()
@@ -251,26 +284,33 @@ class MainActivity : Activity() {
             addView(ImageView(this@MainActivity).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                background = rounded(Color.WHITE, 14)
-                setPadding(dp(6), dp(6), dp(6), dp(6))
-            }, LinearLayout.LayoutParams(dp(56), dp(56)))
+                background = rounded(Color.WHITE, 12)
+                setPadding(dp(4), dp(4), dp(4), dp(4))
+            }, LinearLayout.LayoutParams(dp(40), dp(40)))
 
             val copy = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(14), 0, 0, 0)
+                setPadding(dp(10), 0, 0, 0)
             }
             copy.addView(TextView(this@MainActivity).apply {
                 text = "HexHydra"
-                textSize = 22f
+                textSize = 18f
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(textPrimary())
             })
             copy.addView(TextView(this@MainActivity).apply {
-                text = "v${BuildConfig.VERSION_NAME}"
-                textSize = 13f
+                text = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.VERSION_CODE}"
+                textSize = 11f
+                typeface = Typeface.MONOSPACE
                 setTextColor(textHint())
             })
             addView(copy, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            val dot = View(this@MainActivity).apply {
+                background = rounded(if (isModuleActive()) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
+            }
+            addView(dot, LinearLayout.LayoutParams(dp(12), dp(12)).apply { rightMargin = dp(4) })
+            headerDot = dot
         }
     }
 
@@ -428,21 +468,34 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             addView(sectionTitle("Profile History"))
 
-            val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(actionButton("\uD83D\uDCE4 Export", Color.parseColor("#2563EB")) {
-                exportProfile()
-            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
-            row.addView(actionButton("\uD83D\uDCE5 Import", Color.parseColor("#7C3AED")) {
-                importProfileDialog()
-            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
-            addView(row)
-            addView(spacer(10))
-
             historyContainer = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
             }
             addView(historyContainer)
             refreshHistory()
+        }
+    }
+
+    private fun buildDataTransfer(): View {
+        return panel().apply {
+            orientation = LinearLayout.VERTICAL
+            addView(sectionTitle("Data Transfer"))
+
+            val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(actionButton("📤 Export", Color.parseColor("#2563EB")) {
+                exportProfile()
+            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
+            row.addView(actionButton("📥 Import", Color.parseColor("#7C3AED")) {
+                importProfileDialog()
+            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
+            addView(row)
+            addView(TextView(this@MainActivity).apply {
+                text = "Profile JSON goes through the clipboard."
+                textSize = 11f
+                setTextColor(faintColor())
+                gravity = Gravity.CENTER
+                setPadding(0, dp(8), 0, 0)
+            })
         }
     }
 
@@ -1136,6 +1189,52 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun buildTabBar(): View {
+        tabButtons.clear()
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(cardAltColor(), 12)
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            tabTitles.forEachIndexed { i, title ->
+                val btn = TextView(this@MainActivity).apply {
+                    text = title
+                    textSize = 12f
+                    typeface = Typeface.MONOSPACE
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(10), 0, dp(10))
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { selectTab(i) }
+                }
+                addView(btn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                tabButtons.add(btn)
+            }
+        }
+    }
+
+    private fun selectTab(i: Int) {
+        selectedTab = i
+        tabPages.forEachIndexed { idx, page ->
+            page.visibility = if (idx == i) View.VISIBLE else View.GONE
+        }
+        refreshTabs()
+        if (::mainScroll.isInitialized) mainScroll.post { mainScroll.scrollTo(0, 0) }
+    }
+
+    private fun refreshTabs() {
+        tabButtons.forEachIndexed { i, btn ->
+            if (i == selectedTab) {
+                btn.setTextColor(Color.WHITE)
+                btn.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                btn.background = rounded(Color.parseColor("#2563EB"), 8)
+            } else {
+                btn.setTextColor(textSecondary())
+                btn.typeface = Typeface.MONOSPACE
+                btn.background = null
+            }
+        }
+    }
+
     // ========== Sticky bar / dirty state / badges ==========
 
     private fun markDirty(d: Boolean) {
@@ -1242,9 +1341,10 @@ class MainActivity : Activity() {
 
     private fun sectionTitle(text: String): TextView {
         return TextView(this).apply {
-            this.text = text
-            textSize = 15f
+            this.text = text.uppercase()
+            textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
+            letterSpacing = 0.1f
             setTextColor(textPrimary())
             setPadding(0, 0, 0, dp(12))
         }
