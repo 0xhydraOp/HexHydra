@@ -5,23 +5,23 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
@@ -74,38 +74,62 @@ class MainActivity : Activity() {
         "battery_level" to "Battery Level", "battery_scale" to "Battery Scale"
     )
 
+
     private val fieldKeys = groups.flatMap { it.keys }
     private val values = linkedMapOf<String, String>()
+    // Snapshot of the last saved profile — per-field dirty dots diff against this.
+    private val savedValues = linkedMapOf<String, String>()
     private val inputs = mutableMapOf<String, EditText>()
+    private val dotViews = mutableMapOf<String, TextView>()
     private val detailViews = mutableMapOf<String, TextView>()
-    private lateinit var debugLogging: CheckBox
-    private lateinit var hideSelf: CheckBox
-    private val hookBoxes = mutableMapOf<String, CheckBox>()
+    private lateinit var debugLogging: Switch
+    private lateinit var hideSelf: Switch
+    private val hookBoxes = mutableMapOf<String, Switch>()
     private lateinit var mainScroll: ScrollView
     private var stickySaveBtn: Button? = null
+    private var stickyBar: View? = null
     private lateinit var dirtyText: TextView
     private lateinit var coherenceText: TextView
     private var lastPushOk: Boolean? = null
     private var lastPushAt: Long = 0L
     private val groupBadges = mutableMapOf<Int, TextView>()
-    private val keyToGroupIndex = groups.flatMapIndexed { index, group -> group.keys.map { it to index } }.toMap()
-    private val tabTitles = listOf("DASHBOARD", "FIELDS", "SETTINGS")
-    private val tabButtons = mutableListOf<TextView>()
+    private val keyToGroupIndex = groups.flatMapIndexed { index, group ->
+        group.keys.map { it to index }
+    }.toMap()
     private var tabPages: List<LinearLayout> = emptyList()
     private var selectedTab = 0
     private var headerDot: View? = null
+    private var statusCard: View? = null
+    private var statusDot: View? = null
+    private val navIcons = mutableListOf<TextView>()
+    private val navLabels = mutableListOf<TextView>()
+    private var showAllHistory = false
+
+    private val navData = listOf("🏠" to "Home", "🧬" to "Fields", "⚙️" to "Settings")
 
     private val hookGroups = listOf(
-        "hook_device" to "Device identity (Build fields)",
+        "hook_device" to "Device identity",
         "hook_telephony" to "Telephony & SIM",
-        "hook_network" to "Network (Wi-Fi, DHCP, Bluetooth)",
-        "hook_location" to "Location, locale & timezone",
-        "hook_display" to "Display, GPU & battery",
-        "hook_ids" to "Android IDs (Android ID, AAID, DRM)",
-        "hook_ua" to "User-Agent & Java properties",
-        "hook_stealth" to "Anti-detection & self-hiding"
+        "hook_network" to "Network",
+        "hook_location" to "Location & locale",
+        "hook_display" to "Display & battery",
+        "hook_ids" to "Android IDs",
+        "hook_ua" to "User-Agent",
+        "hook_stealth" to "Anti-detection"
     )
+    private val hookDescs = mapOf(
+        "hook_device" to "Build fields: manufacturer, model, fingerprint",
+        "hook_telephony" to "IMEI, IMSI, SIM & operator data",
+        "hook_network" to "MAC addresses, SSID, Bluetooth",
+        "hook_location" to "GPS coordinates, locale, timezone",
+        "hook_display" to "Screen metrics, GPU renderer, battery",
+        "hook_ids" to "Android ID, GSF ID, AAID, MediaDRM",
+        "hook_ua" to "WebView User-Agent & Java properties",
+        "hook_stealth" to "Hide module traces from scoped apps"
+    )
+
     private lateinit var statusText: TextView
+    private lateinit var statusSub: TextView
     private lateinit var refreshText: TextView
     private lateinit var summaryText: TextView
     private lateinit var accordionContainer: LinearLayout
@@ -115,22 +139,17 @@ class MainActivity : Activity() {
     private val lockedKeys = mutableSetOf<String>() // fields Randomize must not touch
     private val historyPrefsName = "hexhydra_history" // separate file: keeps snapshots out of the hook data path
 
-    // ========== Dark-mode aware palette ==========
-
-    private fun isDark(): Boolean =
-        (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-
-    private fun c(light: String, dark: String): Int = Color.parseColor(if (isDark()) dark else light)
-
-    private fun bgColor() = c("#F0F2F5", "#0B1220")
-    private fun panelColor() = c("#FFFFFF", "#1F2937")
-    private fun inputColor() = c("#FFFFFF", "#111827")
-    private fun cardAltColor() = c("#F9FAFB", "#111827")
-    private fun textPrimary() = c("#111827", "#F9FAFB")
-    private fun textSecondary() = c("#374151", "#D1D5DB")
-    private fun textHint() = c("#6B7280", "#9CA3AF")
-    private fun faintColor() = c("#9CA3AF", "#6B7280")
-    private fun dividerColor() = c("#E5E7EB", "#374151")
+    // ---- palette delegates (tokens live in Ui) ----
+    private fun isDark() = Ui.isDark(this)
+    private fun bgColor() = Ui.bg(this)
+    private fun panelColor() = Ui.card(this)
+    private fun inputColor() = Ui.input(this)
+    private fun cardAltColor() = Ui.cardAlt(this)
+    private fun textPrimary() = Ui.textPrimary(this)
+    private fun textSecondary() = Ui.textSecondary(this)
+    private fun textHint() = Ui.textHint(this)
+    private fun faintColor() = Ui.faint(this)
+    private fun dividerColor() = Ui.divider(this)
 
     // ========== Validation ==========
 
@@ -161,41 +180,33 @@ class MainActivity : Activity() {
         } catch (_: Throwable) { false }
     }
 
+    // ========== Lifecycle / layout ==========
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         loadValues()
 
-        mainScroll = ScrollView(this).apply {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(bgColor())
-            isFillViewport = true
         }
+        root.addView(buildHeader())
+
+        mainScroll = ScrollView(this).apply { isFillViewport = false }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(16), dp(16), dp(32))
+            setPadding(dp(Ui.LG), dp(Ui.SM), dp(Ui.LG), dp(Ui.LG))
         }
         mainScroll.addView(content)
 
-        content.addView(buildHeader())
-        content.addView(spacer(10))
-        content.addView(buildTabBar())
-        content.addView(spacer(10))
-
-        // Dashboard: status + identity + history. Short by design.
-        val dashPage = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        dashPage.addView(buildStatusBadge())
-        refreshText = TextView(this).apply {
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            setTextColor(faintColor())
-            setPadding(0, dp(6), 0, 0)
-        }
-        dashPage.addView(refreshText)
-        dashPage.addView(spacer(6))
+        // Home: status → quick actions → identity → history.
+        val dashPage = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        dashPage.addView(buildStatusCard())
+        dashPage.addView(spacer(Ui.MD))
+        dashPage.addView(buildQuickActions())
+        dashPage.addView(spacer(Ui.MD))
         dashPage.addView(buildDeviceCard())
-        dashPage.addView(spacer(12))
+        dashPage.addView(spacer(Ui.MD))
         dashPage.addView(buildHistory())
         content.addView(dashPage)
 
@@ -207,32 +218,31 @@ class MainActivity : Activity() {
         fieldsPage.addView(buildAccordionEditor())
         content.addView(fieldsPage)
 
-        // Settings: options, actions, data transfer, footer.
+        // Settings: options, hooks, data transfer, danger zone, footer.
         val settingsPage = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
         }
         settingsPage.addView(buildSettings())
-        settingsPage.addView(spacer(12))
-        settingsPage.addView(buildActions())
-        settingsPage.addView(spacer(12))
+        settingsPage.addView(spacer(Ui.MD))
         settingsPage.addView(buildDataTransfer())
-        settingsPage.addView(spacer(8))
+        settingsPage.addView(spacer(Ui.MD))
+        settingsPage.addView(buildDangerZone())
         settingsPage.addView(buildFooter())
         content.addView(settingsPage)
 
         tabPages = listOf(dashPage, fieldsPage, settingsPage)
-        selectTab(0)
-
-        // Sticky action bar: Randomize + Save stay reachable on long screens.
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(bgColor())
-        }
         root.addView(mainScroll, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(buildStickyBar())
+
+        // Sticky Randomize+Save bar: visible on Fields tab, or anywhere when dirty.
+        stickyBar = buildStickyBar()
+        root.addView(stickyBar)
+        root.addView(buildBottomNav())
+
         setContentView(root)
+        selectTab(0)
+        refreshStatusBadge()
     }
 
     override fun onResume() {
@@ -243,14 +253,15 @@ class MainActivity : Activity() {
     private fun refreshStatusBadge() {
         if (!::statusText.isInitialized) return
         val active = isModuleActive()
-        statusText.text = if (active) "MODULE ACTIVE – Spoofing running" else "MODULE INACTIVE – Reboot needed"
-        statusText.setTextColor(if (active) Color.parseColor("#065F46") else Color.parseColor("#991B1B"))
-        val badge = statusText.parent as? LinearLayout ?: return
-        badge.background = rounded(if (active) Color.parseColor("#ECFDF5") else Color.parseColor("#FEF2F2"), 12)
-        badge.getChildAt(0)?.background =
-            rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
-        headerDot?.background =
-            rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
+        val dotColor = if (active) Ui.SUCCESS else Ui.DOT_INACTIVE
+        statusText.text = if (active) "Module Active" else "Module Inactive"
+        statusText.setTextColor(if (active) Ui.okText(this) else Ui.badText(this))
+        statusSub.text = if (active) "Spoofing is running" else "Reboot needed to load hooks"
+        statusSub.setTextColor(if (active) Ui.okText(this) else Ui.badText(this))
+        statusCard?.background =
+            Ui.rounded(this, if (active) Ui.okBg(this) else Ui.badBg(this), Ui.R_CARD)
+        statusDot?.background = Ui.rounded(this, dotColor, Ui.R_PILL)
+        headerDot?.background = Ui.rounded(this, dotColor, Ui.R_PILL)
         if (::refreshText.isInitialized) {
             val refreshed = readRefreshed()
             val line1 = if (refreshed > 0) {
@@ -269,18 +280,20 @@ class MainActivity : Activity() {
         }
     }
 
-    // ========== Header ==========
+
+
+    // ========== Header (fixed, above the scroll area) ==========
 
     private fun buildHeader(): View {
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), 0, dp(4), 0)
+            setPadding(dp(Ui.LG), dp(Ui.MD), dp(Ui.LG), dp(Ui.SM))
 
             addView(ImageView(this@MainActivity).apply {
                 setImageResource(R.mipmap.ic_launcher)
                 scaleType = ImageView.ScaleType.CENTER_CROP
-                background = rounded(Color.WHITE, 12)
+                background = Ui.rounded(this@MainActivity, Color.WHITE, Ui.MD)
                 setPadding(dp(4), dp(4), dp(4), dp(4))
             }, LinearLayout.LayoutParams(dp(40), dp(40)))
 
@@ -290,71 +303,105 @@ class MainActivity : Activity() {
             }
             copy.addView(TextView(this@MainActivity).apply {
                 text = "HexHydra"
-                textSize = 18f
+                textSize = Ui.T_HEADER
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(textPrimary())
             })
             copy.addView(TextView(this@MainActivity).apply {
                 text = "v${BuildConfig.VERSION_NAME} · ${BuildConfig.VERSION_CODE}"
-                textSize = 11f
+                textSize = Ui.T_CAPTION
                 typeface = Typeface.MONOSPACE
                 setTextColor(textHint())
             })
             addView(copy, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
             val dot = View(this@MainActivity).apply {
-                background = rounded(if (isModuleActive()) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
+                background = Ui.rounded(
+                    this@MainActivity,
+                    if (isModuleActive()) Ui.SUCCESS else Ui.DOT_INACTIVE, Ui.R_PILL
+                )
             }
             addView(dot, LinearLayout.LayoutParams(dp(12), dp(12)).apply { rightMargin = dp(4) })
             headerDot = dot
         }
     }
 
-    // ========== Status Badge ==========
+    // ========== Status card ==========
 
-    private fun buildStatusBadge(): View {
+    private fun buildStatusCard(): View {
         val active = isModuleActive()
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            background = rounded(if (active) Color.parseColor("#ECFDF5") else Color.parseColor("#FEF2F2"), 12)
-
-            addView(View(this@MainActivity).apply {
-                background = rounded(if (active) Color.parseColor("#10B981") else Color.parseColor("#EF4444"), 999)
-            }, LinearLayout.LayoutParams(dp(10), dp(10)).apply { rightMargin = dp(10) })
-
-            statusText = TextView(this@MainActivity).apply {
-                text = if (active) "MODULE ACTIVE – Spoofing running" else "MODULE INACTIVE – Reboot needed"
-                textSize = 14f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(if (active) Color.parseColor("#065F46") else Color.parseColor("#991B1B"))
-            }
-            addView(statusText)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(Ui.LG), dp(Ui.LG), dp(Ui.LG), dp(Ui.MD))
+            background = Ui.rounded(
+                this@MainActivity,
+                if (active) Ui.okBg(this@MainActivity) else Ui.badBg(this@MainActivity),
+                Ui.R_CARD
+            )
             isClickable = true
             isFocusable = true
             setOnClickListener { showStatusDialog() }
         }
+
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val dot = View(this).apply {
+            background = Ui.rounded(
+                this@MainActivity,
+                if (active) Ui.SUCCESS else Ui.DOT_INACTIVE, Ui.R_PILL
+            )
+        }
+        row.addView(dot, LinearLayout.LayoutParams(dp(12), dp(12)).apply { rightMargin = dp(Ui.MD) })
+        statusDot = dot
+
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        statusText = TextView(this).apply {
+            textSize = Ui.T_TITLE
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        statusSub = TextView(this).apply { textSize = 12f }
+        col.addView(statusText)
+        col.addView(statusSub)
+        row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        row.addView(TextView(this).apply {
+            text = "ⓘ"
+            textSize = Ui.T_TITLE
+            setTextColor(faintColor())
+        })
+        card.addView(row)
+
+        refreshText = TextView(this).apply {
+            textSize = Ui.T_CAPTION
+            typeface = Typeface.MONOSPACE
+            setTextColor(faintColor())
+            setPadding(0, dp(Ui.SM), 0, 0)
+        }
+        card.addView(refreshText)
+
+        statusCard = card
+        return card
     }
 
-    // ========== Actions ==========
+    // ========== Quick actions (Home) ==========
 
-    private fun buildActions(): View {
-        return panel().apply {
-            orientation = LinearLayout.VERTICAL
-            addView(sectionTitle("Actions"))
-
-            // Randomize + Save live in the sticky bar below; the destructive
-            // reboot stays here, full width.
-            addView(actionButton("🔄  Soft Reboot", Color.parseColor("#DC2626")) {
-                softReboot()
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
-            addView(TextView(this@MainActivity).apply {
-                text = "Randomize and Save are pinned in the bar below."
-                textSize = 12f
-                setTextColor(faintColor())
+    private fun buildQuickActions(): View {
+        return Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Quick Actions"))
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            row.addView(primaryButton("🎲  Randomize All") { randomizeAll() },
+                LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6) })
+            row.addView(outlineButton("🔄  Soft Reboot", Ui.DANGER) { softReboot() },
+                LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+            addView(row)
+            addView(Ui.caption(this@MainActivity,
+                "Randomize fills every unlocked field with a fresh identity.").apply {
                 gravity = Gravity.CENTER
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(Ui.SM), 0, 0)
             })
         }
     }
@@ -362,9 +409,8 @@ class MainActivity : Activity() {
     // ========== Device Preview Card ==========
 
     private fun buildDeviceCard(): View {
-        return panel().apply {
-            orientation = LinearLayout.VERTICAL
-            addView(sectionTitle("Device Profile"))
+        return Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Device Profile"))
 
             val headerRow = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -374,43 +420,40 @@ class MainActivity : Activity() {
             headerRow.addView(TextView(this@MainActivity).apply {
                 text = "📱"
                 textSize = 28f
-                setPadding(0, 0, dp(12), 0)
+                setPadding(0, 0, dp(Ui.MD), 0)
             })
             val nameCol = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
             }
             summaryText = TextView(this@MainActivity).apply {
-                textSize = 16f
+                textSize = Ui.T_TITLE
                 typeface = Typeface.DEFAULT_BOLD
                 setTextColor(textPrimary())
                 setLineSpacing(0f, 1.2f)
             }
             nameCol.addView(summaryText)
-            headerRow.addView(nameCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            headerRow.addView(nameCol, LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(headerRow)
 
-            // Divider
             addView(divider())
 
             val details = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(Ui.SM), 0, 0)
             }
             details.addView(detailRow("IMEI", "imei"))
             details.addView(detailRow("Android ID", "android_id"))
             details.addView(detailRow("WiFi MAC", "mac_address"))
             details.addView(detailRow("Carrier", "sim_operator"))
             addView(details)
-            addView(TextView(this@MainActivity).apply {
-                text = "Tap a value to copy it."
-                textSize = 11f
-                setTextColor(faintColor())
+            addView(Ui.caption(this@MainActivity, "Tap a value to copy it.").apply {
                 setPadding(0, dp(6), 0, 0)
             })
             coherenceText = TextView(this@MainActivity).apply {
                 textSize = 12f
                 typeface = Typeface.DEFAULT_BOLD
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(Ui.SM), 0, 0)
                 isClickable = true
                 isFocusable = true
             }
@@ -431,8 +474,8 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(dp(100), LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(TextView(this@MainActivity).apply {
                 tag = "detail_$key"
-                text = displayValue(key, "\u2014")
-                textSize = 14f
+                text = displayValue(key, "—")
+                textSize = Ui.T_BODY
                 typeface = Typeface.MONOSPACE
                 setTextColor(textSecondary())
                 maxLines = 1
@@ -442,28 +485,27 @@ class MainActivity : Activity() {
                 detailViews[key] = this
                 setOnClickListener {
                     val value = displayValue(key, "")
-                    if (value.isBlank() || value == "\u2014") {
-                        Toast.makeText(this@MainActivity, "Nothing to copy", Toast.LENGTH_SHORT).show()
+                    if (value.isBlank() || value == "—") {
+                        toast("Nothing to copy")
                     } else {
                         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         cm.setPrimaryClip(ClipData.newPlainText(label, value))
-                        Toast.makeText(this@MainActivity, "Copied $label", Toast.LENGTH_SHORT).show()
+                        toast("Copied $label")
                     }
                 }
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         }
     }
 
-    // ========== Profile History + Export/Import ==========
+
+    // ========== Profile History (last 3 + View all) ==========
 
     private var historyContainer: LinearLayout? = null
     private val maxHistory = 10
 
     private fun buildHistory(): View {
-        return panel().apply {
-            orientation = LinearLayout.VERTICAL
-            addView(sectionTitle("Profile History"))
-
+        return Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Profile History"))
             historyContainer = LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
             }
@@ -472,82 +514,17 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun buildDataTransfer(): View {
-        return panel().apply {
-            orientation = LinearLayout.VERTICAL
-            addView(sectionTitle("Data Transfer"))
-
-            val row = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(actionButton("📤 Export", Color.parseColor("#2563EB")) {
-                exportProfile()
-            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(8) })
-            row.addView(actionButton("📥 Import", Color.parseColor("#7C3AED")) {
-                importProfileDialog()
-            }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(8) })
-            addView(row)
-            addView(TextView(this@MainActivity).apply {
-                text = "Profile JSON goes through the clipboard."
-                textSize = 11f
-                setTextColor(faintColor())
-                gravity = Gravity.CENTER
-                setPadding(0, dp(8), 0, 0)
-            })
-        }
-    }
-
-    private fun snapshotToJson(): org.json.JSONObject {
-        val o = org.json.JSONObject()
-        for (k in fieldKeys) o.put(k, values[k].orEmpty())
-        return o
-    }
-
-    private fun pushHistory() {
-        try {
-            val prefs = getSharedPreferences(historyPrefsName, Context.MODE_PRIVATE)
-            val arr = try {
-                org.json.JSONArray(prefs.getString("profile_history", "[]"))
-            } catch (_: Exception) { org.json.JSONArray() }
-            val entry = org.json.JSONObject()
-            entry.put("ts", System.currentTimeMillis())
-            entry.put("values", snapshotToJson())
-            arr.put(entry)
-            while (arr.length() > maxHistory) arr.remove(0)
-            prefs.edit().putString("profile_history", arr.toString()).apply()
-        } catch (_: Exception) {}
-        refreshHistory()
-    }
-
-    private fun readHistory(): List<Pair<Long, Map<String, String>>> {
-        val out = mutableListOf<Pair<Long, Map<String, String>>>()
-        try {
-            val raw = getSharedPreferences(historyPrefsName, Context.MODE_PRIVATE)
-                .getString("profile_history", "[]").orEmpty()
-            val arr = org.json.JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val e = arr.optJSONObject(i) ?: continue
-                val v = e.optJSONObject("values") ?: continue
-                val map = mutableMapOf<String, String>()
-                for (k in fieldKeys) map[k] = v.optString(k, "")
-                out.add(e.optLong("ts", 0L) to map)
-            }
-        } catch (_: Exception) {}
-        return out.reversed() // newest first
-    }
-
     private fun refreshHistory() {
         val container = historyContainer ?: return
         container.removeAllViews()
         val entries = readHistory()
         if (entries.isEmpty()) {
-            container.addView(TextView(this).apply {
-                text = "No saved profiles yet — press Save to record one."
-                textSize = 12f
-                setTextColor(faintColor())
-            })
+            container.addView(Ui.caption(this, "No saved profiles yet — press Save to record one."))
             return
         }
-        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
-        for ((ts, map) in entries) {
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        val shown = if (showAllHistory) entries else entries.take(3)
+        for ((ts, map) in shown) {
             val mfr = map["manufacturer"]?.takeIf { it.isNotBlank() } ?: "Unknown"
             val model = map["model"]?.takeIf { it.isNotBlank() } ?: "device"
             val row = LinearLayout(this).apply {
@@ -556,411 +533,585 @@ class MainActivity : Activity() {
                 setPadding(0, dp(6), 0, dp(6))
             }
             row.addView(TextView(this).apply {
-                text = "${fmt.format(java.util.Date(ts))}  •  ${profileTitle(mfr, model)}"
+                text = "${fmt.format(Date(ts))}  •  ${profileTitle(mfr, model)}"
                 textSize = 13f
                 setTextColor(textSecondary())
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(Button(this).apply {
-                text = "Restore"
+            row.addView(actionButton("Restore", Ui.ACCENT) {
+                values.putAll(map)
+                for ((k, et) in inputs) et.setText(map[k].orEmpty())
+                markDirty(true)
+                refreshAllDots()
+                refreshSummary()
+                toast("Profile restored — press Save to apply.")
+            }, LinearLayout.LayoutParams(dp(84), dp(36)))
+            container.addView(row)
+        }
+        if (entries.size > 3) {
+            container.addView(TextView(this).apply {
+                text = if (showAllHistory) "Show less" else "View all (${entries.size})"
                 textSize = 12f
-                setAllCaps(false)
-                setTextColor(Color.WHITE)
-                background = rounded(Color.parseColor("#2563EB"), 8)
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Ui.ACCENT)
+                gravity = Gravity.CENTER
+                setPadding(0, dp(Ui.SM), 0, dp(2))
+                isClickable = true
+                isFocusable = true
                 setOnClickListener {
-                    values.putAll(map)
-                    for ((k, et) in inputs) et.setText(map[k].orEmpty())
-                    markDirty(true)
-                    refreshSummary()
-                    Toast.makeText(this@MainActivity, "Profile restored — press Save to apply.", Toast.LENGTH_SHORT).show()
+                    showAllHistory = !showAllHistory
+                    refreshHistory()
                 }
             })
-            container.addView(row)
         }
     }
 
-    private fun exportProfile() {
-        try {
-            val json = snapshotToJson().toString(2)
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("hexhydra-profile", json))
-            Toast.makeText(this, "Profile JSON copied to clipboard.", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
+
+    // ========== Data Transfer (Settings) ==========
+
+    private fun buildDataTransfer(): View {
+        return Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Data Transfer"))
+            val btnRow = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            btnRow.addView(outlineButton("📤  Export Profile", Ui.ACCENT) { exportProfile() },
+                LinearLayout.LayoutParams(0, dp(48), 1f).apply { rightMargin = dp(6) })
+            btnRow.addView(outlineButton("📥  Import Profile", Ui.ACCENT) { importProfileDialog() },
+                LinearLayout.LayoutParams(0, dp(48), 1f).apply { leftMargin = dp(6) })
+            addView(btnRow)
+            addView(Ui.caption(this@MainActivity,
+                "Export writes a copy-pastable JSON profile. Import restores one.").apply {
+                setPadding(0, dp(Ui.SM), 0, 0)
+            })
         }
+    }
+
+    private fun snapshotToJson(map: Map<String, String>): String {
+        val sb = StringBuilder("{")
+        fieldKeys.forEachIndexed { i, k ->
+            if (i > 0) sb.append(',')
+            val v = map[k].orEmpty().replace("\\", "\\\\").replace("\"", "\\\"")
+            sb.append('"').append(k).append("\":\"").append(v).append('"')
+        }
+        return sb.append('}').toString()
+    }
+
+    private fun pushHistory(snapshot: Map<String, String>) {
+        try {
+            val prefs = getSharedPreferences(historyPrefsName, MODE_PRIVATE)
+            val editor = prefs.edit()
+            val n = prefs.getInt("history_count", 0)
+            for (i in n - 1 downTo 1) {
+                val e = prefs.getString("h$i", null)
+                if (e != null) prefs.edit().putString("h${i + 1}", e).apply()
+            }
+            editor.putString("h1", System.currentTimeMillis().toString() + "|" + snapshotToJson(snapshot))
+            editor.putInt("history_count", minOf(n + 1, maxHistory))
+            editor.apply()
+        } catch (_: Throwable) {}
+    }
+
+    private fun readHistory(): List<Pair<Long, Map<String, String>>> {
+        val list = mutableListOf<Pair<Long, Map<String, String>>>()
+        try {
+            val prefs = getSharedPreferences(historyPrefsName, MODE_PRIVATE)
+            val n = prefs.getInt("history_count", 0)
+            for (i in 1..minOf(n, maxHistory)) {
+                val e = prefs.getString("h$i", null) ?: continue
+                val sep = e.indexOf('|')
+                if (sep <= 0) continue
+                val ts = e.substring(0, sep).toLongOrNull() ?: continue
+                val json = e.substring(sep + 1)
+                val map = mutableMapOf<String, String>()
+                val body = json.trim().removePrefix("{").removeSuffix("}")
+                val parts = body.split(",")
+                for (p in parts) {
+                    val kv = p.split(":", limit = 2)
+                    if (kv.size == 2) {
+                        val k = kv[0].trim().removeSurrounding("\"")
+                        val v = kv[1].trim().removeSurrounding("\"")
+                            .replace("\\\"", "\"").replace("\\\\", "\\")
+                        map[k] = v
+                    }
+                }
+                if (map.isNotEmpty()) list.add(Pair(ts, map))
+            }
+        } catch (_: Throwable) {}
+        return list.sortedByDescending { it.first }
+    }
+
+
+    private fun exportProfile() {
+        val snapshot = snapshotToJson(values)
+        AlertDialog.Builder(this)
+            .setTitle("Export Profile")
+            .setMessage("Copy this JSON to transfer your profile:\n\n$snapshot")
+            .setPositiveButton("Copy") { _, _ ->
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("hexhydra_profile", snapshot))
+                toast("Profile copied to clipboard")
+            }
+            .setNegativeButton("Close", null)
+            .show()
     }
 
     private fun importProfileDialog() {
         val input = EditText(this).apply {
-            hint = "Paste profile JSON here"
-            textSize = 13f
+            hint = "{\"manufacturer\":\"Google\",\"model\":\"Pixel 7 Pro\",...}"
+            setHintTextColor(textHint())
             setTextColor(textPrimary())
-            setHintTextColor(faintColor())
-            background = rounded(inputColor(), 8)
-            setPadding(dp(12), dp(12), dp(12), dp(12))
-            minLines = 6
-            gravity = Gravity.TOP
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(Ui.MD), dp(Ui.MD), dp(Ui.MD), dp(Ui.MD))
+            background = Ui.rounded(this@MainActivity, inputColor(), 10)
+            minLines = 3
         }
         AlertDialog.Builder(this)
-            .setTitle("Import profile")
+            .setTitle("Import Profile")
+            .setMessage("Paste an exported JSON profile:")
             .setView(input)
-            .setNegativeButton("Cancel", null)
             .setPositiveButton("Import") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isBlank()) { toast("Nothing to import"); return@setPositiveButton }
                 try {
-                    val o = org.json.JSONObject(input.text.toString())
-                    var count = 0
-                    for (k in fieldKeys) {
-                        if (o.has(k)) { values[k] = o.optString(k, ""); count++ }
+                    val body = text.removePrefix("{").removeSuffix("}")
+                    val map = mutableMapOf<String, String>()
+                    for (p in body.split(",")) {
+                        val kv = p.split(":", limit = 2)
+                        if (kv.size == 2) {
+                            val k = kv[0].trim().removeSurrounding("\"")
+                            val v = kv[1].trim().removeSurrounding("\"")
+                                .replace("\\\"", "\"").replace("\\\\", "\\")
+                            map[k] = v
+                        }
                     }
-                    if (count == 0) {
-                        Toast.makeText(this, "No known fields found in JSON.", Toast.LENGTH_LONG).show()
-                        return@setPositiveButton
-                    }
+                    if (map.isEmpty()) { toast("Could not parse profile"); return@setPositiveButton }
+                    for (k in fieldKeys) if (map.containsKey(k)) values[k] = map[k]!!
                     for ((k, et) in inputs) et.setText(values[k].orEmpty())
                     markDirty(true)
+                    refreshAllDots()
                     refreshSummary()
-                    Toast.makeText(this, "Imported $count fields — press Save to apply.", Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    Toast.makeText(this, "Invalid JSON: ${e.message}", Toast.LENGTH_LONG).show()
+                    toast("Profile imported — press Save to apply.")
+                } catch (t: Throwable) {
+                    toast("Import failed: ${t.message}")
                 }
             }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 
-    // ========== Settings ==========
+
+    // ========== Settings (switch rows) ==========
+
+    /** Title + subtitle row with a trailing Switch. Returns (row, switch). */
+    private fun switchRow(title: String, subtitle: String, checked: Boolean): Pair<View, Switch> {
+        val sw = Switch(this).apply { isChecked = checked }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(Ui.SM), 0, dp(Ui.SM))
+        }
+        val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(TextView(this).apply {
+            text = title
+            textSize = Ui.T_BODY
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(textPrimary())
+        })
+        if (subtitle.isNotBlank()) {
+            col.addView(TextView(this).apply {
+                text = subtitle
+                textSize = Ui.T_CAPTION
+                setTextColor(faintColor())
+                setPadding(0, dp(2), 0, 0)
+            })
+        }
+        row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(sw)
+        row.isClickable = true
+        row.isFocusable = true
+        row.setOnClickListener { sw.toggle() }
+        return row to sw
+    }
 
     private fun buildSettings(): View {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return panel().apply {
-            orientation = LinearLayout.VERTICAL
-            addView(sectionTitle("Module Options"))
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
 
-            debugLogging = CheckBox(this@MainActivity).apply {
-                text = "Debug logging"
-                textSize = 14f
-                setTextColor(textSecondary())
-                isChecked = prefs.getBoolean("setting_debug_log", false)
-                setPadding(0, dp(4), 0, dp(4))
-            }
-            hideSelf = CheckBox(this@MainActivity).apply {
-                text = "Hide module from scoped apps"
-                textSize = 14f
-                setTextColor(textSecondary())
-                isChecked = prefs.getBoolean("setting_hide_self", true)
-                setPadding(0, dp(4), 0, dp(4))
-            }
-            addView(debugLogging)
-            addView(hideSelf)
+        val optionsCard = Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Module Options"))
+            val (r1, s1) = switchRow(
+                "Debug logging", "Verbose Xposed logcat output",
+                prefs.getBoolean("setting_debug_log", false)
+            )
+            debugLogging = s1
+            addView(r1)
+            addView(Ui.dividerView(this@MainActivity))
+            val (r2, s2) = switchRow(
+                "Hide module from scoped apps", "Anti-detection self-hiding",
+                prefs.getBoolean("setting_hide_self", true)
+            )
+            hideSelf = s2
+            addView(r2)
+        }
 
-            addView(TextView(this@MainActivity).apply {
-                text = "Hook categories (restart target apps after changing)"
-                textSize = 12f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(textHint())
-                setPadding(0, dp(12), 0, dp(4))
+        val hooksCard = Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Hook Toggles"))
+            addView(Ui.caption(this@MainActivity,
+                "Restart target apps after changing these.").apply {
+                setPadding(0, 0, 0, dp(Ui.SM))
             })
             hookBoxes.clear()
-            for ((key, label) in hookGroups) {
-                val box = CheckBox(this@MainActivity).apply {
-                    text = label
-                    textSize = 14f
-                    setTextColor(textSecondary())
-                    isChecked = prefs.getBoolean(key, true)
-                    setPadding(0, dp(4), 0, dp(4))
-                }
-                hookBoxes[key] = box
-                addView(box)
+            hookGroups.forEachIndexed { i, (key, label) ->
+                val (row, sw) = switchRow(
+                    label, hookDescs[key].orEmpty(),
+                    prefs.getBoolean(key, true)
+                )
+                hookBoxes[key] = sw
+                if (i > 0) addView(Ui.dividerView(this@MainActivity))
+                addView(row)
             }
         }
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(optionsCard)
+            addView(spacer(Ui.MD))
+            addView(hooksCard)
+        }
     }
+
+    // ========== Danger Zone ==========
+
+    private fun buildDangerZone(): View {
+        return Ui.cardView(this).apply {
+            addView(Ui.sectionTitle(this@MainActivity, "Danger Zone"))
+            addView(outlineButton("🔄  Soft Reboot (restart Android runtime)", Ui.DANGER) {
+                softReboot()
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+            addView(Ui.caption(this@MainActivity,
+                "Restarts system_server — screen goes black ~15 seconds. " +
+                    "Required after enabling the module in LSPosed.").apply {
+                setPadding(0, dp(Ui.SM), 0, 0)
+            })
+        }
+    }
+
+    private fun buildFooter(): View {
+        return TextView(this).apply {
+            text = "HexHydra v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})\n" +
+                "Scope target apps in LSPosed, then Save here and restart them."
+            textSize = Ui.T_CAPTION
+            setTextColor(faintColor())
+            gravity = Gravity.CENTER
+            setPadding(0, dp(Ui.LG), 0, dp(Ui.SM))
+        }
+    }
+
 
     // ========== Accordion Editor ==========
 
     private fun buildAccordionEditor(): View {
-        return panel().apply {
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(sectionTitle("Field Editor"))
-            addView(TextView(this@MainActivity).apply {
-                text = "Tap a group to expand and edit its fields."
-                textSize = 12f
-                setTextColor(faintColor())
-                setPadding(0, 0, 0, dp(10))
-            })
-
-            addView(EditText(this@MainActivity).apply {
-                hint = "\uD83D\uDD0D Search fields…"
-                setSingleLine()
-                textSize = 14f
-                setTextColor(textPrimary())
-                setHintTextColor(faintColor())
-                background = rounded(cardAltColor(), 8)
-                setPadding(dp(12), 0, dp(12), 0)
-                addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                        searchQuery = s?.toString()?.trim().orEmpty()
-                        refreshAccordion()
-                    }
-                    override fun afterTextChanged(s: Editable?) = Unit
-                })
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(10) })
-
-            val toggleRow = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END
-                setPadding(0, 0, 0, dp(4))
-            }
-            toggleRow.addView(TextView(this@MainActivity).apply {
-                text = "Expand all"
-                textSize = 12f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.parseColor("#2563EB"))
-                setPadding(dp(10), dp(10), dp(10), dp(10))
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    expandedGroups.clear()
-                    for (i in groups.indices) expandedGroups.add(i)
-                    refreshAccordion()
-                }
-            })
-            toggleRow.addView(TextView(this@MainActivity).apply {
-                text = "Collapse all"
-                textSize = 12f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.parseColor("#2563EB"))
-                setPadding(dp(10), dp(10), dp(10), dp(10))
-                isClickable = true
-                isFocusable = true
-                setOnClickListener {
-                    expandedGroups.clear()
-                    refreshAccordion()
-                }
-            })
-            addView(toggleRow)
-
-            accordionContainer = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            addView(accordionContainer)
-
-            groups.forEachIndexed { index, group ->
-                accordionContainer.addView(buildGroupSection(index, group))
-                if (index < groups.size - 1) accordionContainer.addView(spacer(6))
-            }
         }
+
+        val search = EditText(this).apply {
+            hint = "🔍  Filter fields…"
+            setHintTextColor(faintColor())
+            setTextColor(textPrimary())
+            textSize = 13f
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(Ui.MD), dp(10), dp(Ui.MD), dp(10))
+            background = Ui.rounded(this@MainActivity, inputColor(), 10)
+            addTextChangedListener(object : TextWatcher {
+                override fun afterTextChanged(s: Editable?) {
+                    searchQuery = s?.toString()?.trim()?.lowercase() ?: ""
+                    refreshAccordion()
+                }
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            })
+        }
+        container.addView(search, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        container.addView(spacer(Ui.SM))
+
+        val toggleRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+        }
+        toggleRow.addView(TextView(this).apply {
+            text = "Expand all"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Ui.ACCENT)
+            setPadding(dp(Ui.SM), dp(2), dp(Ui.SM), dp(2))
+            setOnClickListener {
+                expandedGroups.clear()
+                expandedGroups.addAll(groups.indices)
+                refreshAccordion()
+            }
+        })
+        toggleRow.addView(TextView(this).apply {
+            text = "  |  "
+            textSize = 12f
+            setTextColor(faintColor())
+        })
+        toggleRow.addView(TextView(this).apply {
+            text = "Collapse all"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Ui.ACCENT)
+            setPadding(dp(Ui.SM), dp(2), dp(Ui.SM), dp(2))
+            setOnClickListener {
+                expandedGroups.clear()
+                refreshAccordion()
+            }
+        })
+        container.addView(toggleRow)
+        container.addView(spacer(Ui.SM))
+
+        accordionContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        container.addView(accordionContainer)
+        refreshAccordion()
+        return container
     }
 
     private fun buildGroupSection(index: Int, group: FieldGroup): View {
-        val isExpanded = index in expandedGroups
-        val card = LinearLayout(this).apply {
+        val expanded = expandedGroups.contains(index)
+        val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(cardAltColor(), 10)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
         }
 
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(Ui.MD), dp(Ui.SM), dp(Ui.MD))
+            background = Ui.rounded(this@MainActivity, cardAltColor(), 10)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                if (expandedGroups.contains(index)) expandedGroups.remove(index)
+                else expandedGroups.add(index)
+                refreshAccordion()
+            }
         }
         header.addView(TextView(this).apply {
-            text = if (isExpanded) "▾  ${group.title}" else "▸  ${group.title}"
-            textSize = 14f
+            text = if (expanded) "▾  ${group.title}" else "▸  ${group.title}"
+            textSize = Ui.T_BODY
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(textSecondary())
-            tag = "header_$index"
+            setTextColor(textPrimary())
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
+        // Per-group error badge.
         val badge = TextView(this).apply {
-            textSize = 11f
+            textSize = 10f
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(10), dp(2), dp(10), dp(2))
+            setTextColor(Color.WHITE)
+            setPadding(dp(6), dp(1), dp(6), dp(1))
+            visibility = View.GONE
         }
-        header.addView(badge)
+        styleGroupBadge(badge, groupErrorCount(index))
         groupBadges[index] = badge
-        styleGroupBadge(badge, group)
+        header.addView(badge)
 
-        header.setOnClickListener {
-            if (index in expandedGroups) expandedGroups.remove(index)
-            else expandedGroups.add(index)
-            refreshAccordion()
+        // Per-group randomize (does not toggle the accordion).
+        header.addView(TextView(this).apply {
+            text = "🎲"
+            textSize = Ui.T_TITLE
+            setPadding(dp(10), dp(2), dp(4), dp(2))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "Randomize ${group.title}"
+            setOnClickListener { randomizeGroup(group) }
+        })
+        header.addView(TextView(this).apply {
+            text = if (expanded) "−" else "+"
+            textSize = Ui.T_TITLE
+            setTextColor(faintColor())
+            setPadding(dp(10), 0, 0, 0)
+        })
+        section.addView(header)
+
+        if (expanded) {
+            val body = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(10), dp(Ui.MD), dp(10), dp(4))
+                background = Ui.rounded(this@MainActivity, cardAltColor(), 10)
+            }
+            populateFields(body, group.keys)
+            section.addView(body)
         }
-        card.addView(header)
-
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = if (isExpanded) View.VISIBLE else View.GONE
-            tag = "content_$index"
-            setPadding(0, dp(8), 0, 0)
-        }
-
-        // Always populate fields, even for collapsed sections — they sit
-        // hidden until expanded. Doing it lazily (only when expanded) caused
-        // Randomize All to skip fields in non-default sections, because the
-        // EditTexts for those fields never made it into the `inputs` map.
-        populateFields(content, group)
-
-        card.addView(content)
-        return card
-    }
-
-    private fun populateFields(container: LinearLayout, group: FieldGroup) {
-        group.keys.forEach { key ->
-            val label = fieldLabels[key] ?: key.replace("_", " ").replaceFirstChar { it.uppercase() }
-            val labelRow = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(10), 0, dp(4))
-            }
-            labelRow.addView(TextView(this).apply {
-                text = label
-                textSize = 11f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(textHint())
-            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val lockView = TextView(this).apply {
-                text = if (key in lockedKeys) "\uD83D\uDD12" else "\uD83D\uDD13"
-                contentDescription = if (key in lockedKeys) "Unlock $label" else "Lock $label"
-                textSize = 14f
-                setPadding(dp(8), dp(2), dp(8), dp(2))
-                isClickable = true
-                isFocusable = true
-            }
-            lockView.setOnClickListener {
-                if (key in lockedKeys) lockedKeys.remove(key) else lockedKeys.add(key)
-                val locked = key in lockedKeys
-                lockView.text = if (locked) "\uD83D\uDD12" else "\uD83D\uDD13"
-                lockView.contentDescription = if (locked) "Unlock $label" else "Lock $label"
-                persistLocks()
-                Toast.makeText(
-                    this,
-                    if (locked) "$label locked — Randomize will keep it" else "$label unlocked",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-            labelRow.addView(lockView)
-            container.addView(labelRow)
-            val errorView = TextView(this).apply {
-                textSize = 11f
-                setTextColor(Color.parseColor("#DC2626"))
-                setPadding(0, dp(2), 0, 0)
-                visibility = View.GONE
-            }
-            container.addView(EditText(this).apply {
-                setText(values[key].orEmpty())
-                setSingleLine()
-                textSize = 14f
-                setTextColor(textPrimary())
-                hint = label
-                inputType = inputTypeFor(key)
-                background = rounded(inputColor(), 8)
-                setPadding(dp(12), 0, dp(12), 0)
-                addTextChangedListener(object : TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                        values[key] = s?.toString().orEmpty()
-                        markDirty(true)
-                        val err = validateField(key, values[key].orEmpty())
-                        errorView.text = err.orEmpty()
-                        errorView.visibility = if (err == null) View.GONE else View.VISIBLE
-                        refreshGroupBadgeForKey(key)
-                        refreshSummary()
-                    }
-                    override fun afterTextChanged(s: Editable?) = Unit
-                })
-                val initialErr = validateField(key, values[key].orEmpty())
-                errorView.text = initialErr.orEmpty()
-                errorView.visibility = if (initialErr == null) View.GONE else View.VISIBLE
-                inputs[key] = this
-            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(46)))
-            container.addView(errorView)
-        }
+        return section
     }
 
     private fun inputTypeFor(key: String): Int = when (key) {
-        "screen_width", "screen_height", "screen_density", "battery_level", "battery_scale",
-        "imei", "meid", "imsi", "sim_sub_id" -> InputType.TYPE_CLASS_NUMBER
-        "latitude", "longitude" ->
-            InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
-        "mobile_no" -> InputType.TYPE_CLASS_PHONE
+        "imei", "meid", "sim_sub_id", "latitude", "longitude",
+        "screen_width", "screen_height", "screen_density",
+        "battery_level", "battery_scale" ->
+            InputType.TYPE_CLASS_TEXT
+        "ip_address" -> InputType.TYPE_CLASS_TEXT
         else -> InputType.TYPE_CLASS_TEXT
     }
 
-    private fun groupMatches(group: FieldGroup): Boolean {
-        if (searchQuery.isBlank()) return true
-        val q = searchQuery.lowercase()
+
+    private fun populateFields(container: LinearLayout, keys: List<String>) {
+        for (key in keys) {
+            val wrapper = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(6), 0, dp(6))
+            }
+            val labelRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            // Per-field dirty dot (visible when value differs from the saved profile).
+            val dot = TextView(this).apply {
+                text = "●"
+                textSize = 9f
+                setTextColor(Ui.WARN)
+                setPadding(0, 0, dp(6), 0)
+                visibility = if (values[key].orEmpty() != savedValues[key].orEmpty())
+                    View.VISIBLE else View.GONE
+            }
+            dotViews[key] = dot
+            labelRow.addView(dot)
+
+            labelRow.addView(TextView(this).apply {
+                text = fieldLabels[key] ?: key
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(textSecondary())
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            val lock = TextView(this).apply {
+                text = if (lockedKeys.contains(key)) "🔒" else "🔓"
+                textSize = Ui.T_BODY
+                setPadding(dp(Ui.SM), dp(2), dp(2), dp(2))
+                isClickable = true
+                isFocusable = true
+                contentDescription = "Lock ${fieldLabels[key] ?: key}"
+                setOnClickListener {
+                    if (lockedKeys.contains(key)) {
+                        lockedKeys.remove(key)
+                        text = "🔓"
+                        toast("${fieldLabels[key] ?: key} unlocked — Randomize will change it")
+                    } else {
+                        lockedKeys.add(key)
+                        text = "🔒"
+                        toast("${fieldLabels[key] ?: key} locked — Randomize will skip it")
+                    }
+                    persistLocks()
+                }
+            }
+            labelRow.addView(lock)
+            wrapper.addView(labelRow)
+
+            val errorText = TextView(this).apply {
+                textSize = Ui.T_CAPTION
+                setTextColor(Ui.DANGER)
+                visibility = View.GONE
+                setPadding(0, dp(2), 0, 0)
+            }
+
+            val et = EditText(this).apply {
+                setText(values[key].orEmpty())
+                hint = if (key == "android_version") "e.g. 14" else fieldLabels[key]
+                setHintTextColor(faintColor())
+                setTextColor(textPrimary())
+                textSize = 13f
+                typeface = Typeface.MONOSPACE
+                inputType = inputTypeFor(key)
+                setPadding(dp(Ui.MD), dp(10), dp(Ui.MD), dp(10))
+                background = Ui.rounded(this@MainActivity, inputColor(), 10)
+                setTag("field_$key")
+                addTextChangedListener(object : TextWatcher {
+                    override fun afterTextChanged(s: Editable?) {
+                        val raw = s?.toString() ?: ""
+                        val err = validateField(key, raw)
+                        if (err != null && raw.isNotBlank()) {
+                            errorText.text = err
+                            errorText.visibility = View.VISIBLE
+                        } else {
+                            errorText.visibility = View.GONE
+                        }
+                        refreshGroupBadgeForKey(key)
+                        values[key] = raw
+                        refreshDirtyDot(key)
+                        markDirty(true)
+                        refreshSummary()
+                    }
+                    override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                    override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                })
+            }
+            inputs[key] = et
+            wrapper.addView(et)
+            wrapper.addView(errorText)
+            container.addView(wrapper)
+        }
+    }
+
+    private fun refreshDirtyDot(key: String) {
+        dotViews[key]?.visibility =
+            if (values[key].orEmpty() != savedValues[key].orEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private fun refreshAllDots() {
+        for (k in fieldKeys) refreshDirtyDot(k)
+    }
+
+    private fun groupMatches(group: FieldGroup, q: String): Boolean {
+        if (q.isEmpty()) return true
         if (group.title.lowercase().contains(q)) return true
-        return group.keys.any { key ->
-            key.contains(q, ignoreCase = true) ||
-                (fieldLabels[key]?.contains(q, ignoreCase = true) == true)
+        return group.keys.any { k ->
+            k.lowercase().contains(q) ||
+                (fieldLabels[k]?.lowercase()?.contains(q) ?: false) ||
+                (values[k]?.lowercase()?.contains(q) ?: false)
         }
     }
 
     private fun refreshAccordion() {
-        for (i in 0 until accordionContainer.childCount) {
-            val child = accordionContainer.getChildAt(i)
-            if (child is LinearLayout && child.tag == null && child.childCount >= 2) {
-                // This is a group card — find header text and content by index
-                val headerRow = child.getChildAt(0) as? LinearLayout ?: continue
-                val headerText = headerRow.getChildAt(0) as? TextView ?: continue
-                val tag = headerText.tag as? String ?: continue
-                if (!tag.startsWith("header_")) continue
-                val idx = tag.removePrefix("header_").toIntOrNull() ?: continue
-                val content = child.getChildAt(1) as? LinearLayout ?: continue
-                val group = groups[idx]
-                val matches = groupMatches(group)
-                // Hide non-matching groups while searching; matching groups auto-expand.
-                child.visibility = if (matches) View.VISIBLE else View.GONE
-                if (!matches) continue
-                val isExpanded = idx in expandedGroups || searchQuery.isNotBlank()
-
-                headerText.text = if (isExpanded) "▾  ${group.title}" else "▸  ${group.title}"
-                groupBadges[idx]?.let { styleGroupBadge(it, group) }
-                content.visibility = if (isExpanded) View.VISIBLE else View.GONE
-
-                if (isExpanded && content.childCount == 0) {
-                    populateFields(content, group)
-                }
+        if (!::accordionContainer.isInitialized) return
+        accordionContainer.removeAllViews()
+        for ((index, group) in groups.withIndex()) {
+            if (groupMatches(group, searchQuery)) {
+                accordionContainer.addView(buildGroupSection(index, group))
+                accordionContainer.addView(spacer(Ui.SM))
             }
         }
     }
 
-    // ========== Footer ==========
 
-    private fun buildFooter(): View {
-        return TextView(this).apply {
-            text = "Scope target apps in LSPosed to spoof them.\nAfter saving, restart the target app to apply."
-            textSize = 12f
-            gravity = Gravity.CENTER
-            setTextColor(faintColor())
-            setPadding(dp(16), dp(12), dp(16), dp(8))
-        }
-    }
-
-    // ========== Data ==========
+    // ========== Prefs I/O & randomize logic ==========
 
     private fun loadValues() {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         fieldKeys.forEach { values[it] = prefs.getString(it, "").orEmpty() }
+        savedValues.clear()
+        savedValues.putAll(values)
         lockedKeys.clear()
-        prefs.getString("locked_fields", "").orEmpty()
-            .split(",").map { it.trim() }.filter { it in fieldKeys }
-            .forEach { lockedKeys.add(it) }
+        lockedKeys.addAll(prefs.getString("locked_keys", "").orEmpty()
+            .split(",").filter { it.isNotBlank() })
         markDirty(false)
     }
 
     private fun persistLocks() {
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .putString("locked_fields", lockedKeys.sorted().joinToString(","))
-            .apply()
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            .putString("locked_keys", lockedKeys.joinToString(",")).apply()
     }
 
     private fun randomizeAll() {
-        if (dirty) {
+        val locked = lockedKeys.size
+        if (locked > 0 && dirty) {
             AlertDialog.Builder(this)
-                .setTitle("Discard unsaved edits?")
-                .setMessage("Randomizing replaces the values you edited but haven't saved.")
-                .setNegativeButton("Cancel", null)
+                .setTitle("Randomize All?")
+                .setMessage("You have $locked locked field(s) and unsaved edits. " +
+                    "Locked fields are kept; everything else is replaced with new random values.")
                 .setPositiveButton("Randomize") { _, _ -> doRandomize() }
+                .setNegativeButton("Cancel", null)
                 .show()
         } else {
             doRandomize()
@@ -968,273 +1119,310 @@ class MainActivity : Activity() {
     }
 
     private fun doRandomize() {
-        // Locked fields survive: snapshot first, restore after generating.
-        val preserved = lockedKeys.associateWith { values[it].orEmpty() }
-        val fresh = FakeData.generateAll().toMutableMap()
-        for ((k, v) in preserved) fresh[k] = v
-        // Brief crossfade on the profile card for visual feedback
-        val deviceCard = summaryText.parent?.parent as? ViewGroup
-        deviceCard?.animate()?.alpha(0.3f)?.setDuration(120)?.withEndAction {
-            values.putAll(fresh)
-            for ((key, editText) in inputs) {
-                editText.setText(values[key].orEmpty())
-            }
-            refreshSummary()
-            deviceCard.animate().alpha(1f).setDuration(200).start()
-        }?.start() ?: run {
-            values.putAll(fresh)
-            for ((key, editText) in inputs) {
-                editText.setText(values[key].orEmpty())
-            }
-            refreshSummary()
+        val fresh = FakeData.generateAll()
+        for (k in fieldKeys) {
+            if (k in lockedKeys) continue
+            values[k] = fresh[k].orEmpty()
+            inputs[k]?.setText(values[k])
         }
-        Toast.makeText(this, "New profile generated.", Toast.LENGTH_SHORT).show()
-        markDirty(true)
+        refreshAllDots()
+        refreshSummary()
+        // Cross-field coherence via the unit-tested ProfileCoherence validator.
+        val issues = ProfileCoherence.issues(values)
+        coherenceText.text = if (issues.isEmpty())
+            "✓  Profile coherent" else "⚠  ${issues.size} issue(s) — tap to view"
+        coherenceText.setTextColor(if (issues.isEmpty()) Ui.okText(this) else Ui.WARN)
+        coherenceText.setOnClickListener {
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle(if (issues.isEmpty()) "Profile coherent" else "Coherence check")
+                .setMessage(if (issues.isEmpty())
+                    "All cross-field checks passed (brand/model, fingerprint, TAC, OUI, " +
+                        "carrier/country, locale, timezone, battery)."
+                else
+                    issues.joinToString("\n\n"))
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
+    /** Randomizes only the given group's fields (respecting 🔒 locks). */
+    private fun randomizeGroup(group: FieldGroup) {
+        val fresh = FakeData.generateAll()
+        var changed = 0
+        for (k in group.keys) {
+            if (k in lockedKeys) continue
+            values[k] = fresh[k].orEmpty()
+            inputs[k]?.setText(values[k])
+            changed++
+        }
+        refreshAllDots()
+        refreshSummary()
+        toast(if (changed > 0) "🎲 ${group.title} randomized ($changed fields)"
+              else "🔒 ${group.title} is fully locked")
     }
 
     private fun refreshSummary() {
         if (!::summaryText.isInitialized) return
-        val mfr = displayValue("manufacturer", "Unknown")
-        val model = displayValue("model", "Unknown")
-        val android = displayValue("android_version", "0")
-        summaryText.text = "${profileTitle(mfr, model)}\nAndroid $android"
-
-        // Refresh detail views in the device card
-        for (key in listOf("imei", "android_id", "mac_address", "sim_operator")) {
-            detailViews[key]?.text = displayValue(key, "\u2014")
-        }
-
-        // Profile coherence, read-only use of the pure validator.
-        if (::coherenceText.isInitialized) {
-            val issues = ProfileCoherence.issues(values)
-            if (issues.isEmpty()) {
-                coherenceText.text = "✓ Profile coherent"
-                coherenceText.setTextColor(Color.parseColor("#065F46"))
-            } else {
-                val n = issues.size
-                coherenceText.text = "⚠ $n coherence issue${if (n == 1) "" else "s"} — tap to view"
-                coherenceText.setTextColor(Color.parseColor("#B45309"))
-            }
-            coherenceText.setOnClickListener {
-                val list = ProfileCoherence.issues(values)
-                if (list.isEmpty()) return@setOnClickListener
-                AlertDialog.Builder(this)
-                    .setTitle("Coherence issues")
-                    .setMessage(list.joinToString("\n\n"))
-                    .setPositiveButton("OK", null)
-                    .show()
-            }
-        }
+        summaryText.text = profileTitle(values["manufacturer"], values["model"])
+        detailViews["imei"]?.text = displayValue("imei", "—")
+        detailViews["android_id"]?.text = displayValue("android_id", "—")
+        detailViews["mac_address"]?.text = displayValue("mac_address", "—")
+        detailViews["sim_operator"]?.text = displayValue("sim_operator", "—")
     }
 
-    private fun displayValue(key: String, fallback: String): String {
-        return values[key]?.takeIf { it.isNotBlank() } ?: fallback
+    private fun displayValue(key: String, fallback: String): String =
+        values[key]?.takeIf { it.isNotBlank() } ?: fallback
+
+    private fun profileTitle(mfr: String?, model: String?): String {
+        val m = mfr?.takeIf { it.isNotBlank() } ?: "Unknown"
+        val d = model?.takeIf { it.isNotBlank() } ?: "Device"
+        return "$m $d"
     }
 
-    /**
-     * Some profiles store the brand inside `model` already ("OnePlus 13R",
-     * "Xiaomi 15"), so joining manufacturer + model would print it twice.
-     * Collapse to the model when it already starts with the manufacturer.
-     */
-    private fun profileTitle(manufacturer: String, model: String): String =
-        if (model.startsWith(manufacturer, ignoreCase = true)) model else "$manufacturer $model"
 
-    // ========== Save ==========
+    // ========== System-properties push & save ==========
 
     /**
-     * Cross-process bridge for ROMs that keep app prefs outside the path
-     * XSharedPreferences reads. On this Nothing OS device the framework stores
-     * prefs under /data/misc/<uuid>/prefs/<pkg>/ instead of
-     * /data/user/<id>/<pkg>/shared_prefs/, so XSharedPreferences always comes
-     * back empty and the module falls back to random values per process.
-     *
-     * System properties are globally readable, and the module already reads
-     * them via readFromSystemProperties(). We push the saved config there with
-     * root (same mechanism the module's own bridge uses), so every scoped app
-     * gets the SAME saved identity instead of a fresh random one.
+     * Pushes prefs JSON + refresh timestamp into system properties via su.
+     * This is the real channel the hooked system_server reads from —
+     * /data/local/tmp file watches are unreliable (SELinux, timing).
      */
-    private fun pushConfigToSystemProperties() {
-        // su can block (grant prompt) and Bridge.pushToSystemProperties is
-        // timeout-bounded — but it must never run on the main thread.
-        val hooks = HashMap<String, Boolean>()
-        for ((key, box) in hookBoxes) hooks[key] = box.isChecked
-        val propMap = Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks)
-        Thread {
-            val ok = try {
-                Bridge.pushToSystemProperties(propMap)
-            } catch (e: Exception) {
-                logToLogcat("Bridge push failed: ${e.message}")
-                false
+    private fun pushConfigToSystemProperties(): Boolean {
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val map = prefs.all
+            val sb = StringBuilder("{")
+            var first = true
+            for ((k, v) in map) {
+                if (k.startsWith("hook_") || k.startsWith("setting_") || k == "locked_keys") continue
+                val s = v as? String ?: continue
+                if (!first) sb.append(',')
+                first = false
+                sb.append('"').append(k).append("\":\"").append(s.replace("\"", "\\\"")).append('"')
             }
-            runOnUiThread {
-                lastPushOk = ok
-                lastPushAt = System.currentTimeMillis()
-                if (ok) {
-                    logToLogcat("Bridge props pushed")
-                } else {
-                    logToLogcat("Bridge push failed (no su or setprop error)")
-                    Toast.makeText(this, "Saved locally – root prop push failed; scoped apps keep old values until you retry.", Toast.LENGTH_LONG).show()
-                }
+            sb.append('}')
+            val json = sb.toString().replace("\"", "\\\"").replace("'", "'\"'\"'")
+            val ts = System.currentTimeMillis()
+            val cmd = "setprop hexhydra.config '$json'; setprop hexhydra.refreshed $ts"
+
+            val p = Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
+            p.waitFor()
+            val ok = p.exitValue() == 0
+            if (ok) {
+                lastPushOk = true
+                lastPushAt = ts
                 refreshStatusBadge()
+                logToLogcat("HexHydra props pushed ($ts)")
             }
-        }.start()
+            return ok
+        } catch (_: Throwable) { return false }
     }
 
-    private fun saveConfig(saveButton: Button? = null) {
-        val invalid = fieldKeys.mapNotNull { key ->
-            validateField(key, values[key].orEmpty())?.let { key to it }
+    private fun saveConfig() {
+        // Hard-gate: refuse to save while any field fails validation.
+        val errors = fieldKeys.mapNotNull { k ->
+            val raw = values[k].orEmpty()
+            validateField(k, raw)?.let { err -> "${fieldLabels[k] ?: k}: $err" }
         }
-        if (invalid.isNotEmpty()) {
-            val names = invalid.take(3).joinToString(", ") { (key, _) -> fieldLabels[key] ?: key }
-            val more = if (invalid.size > 3) " +${invalid.size - 3} more" else ""
-            Toast.makeText(this, "Fix invalid fields: $names$more", Toast.LENGTH_LONG).show()
-            val firstKey = invalid.first().first
-            groups.forEachIndexed { index, group -> if (firstKey in group.keys) expandedGroups.add(index) }
-            refreshAccordion()
-            scrollToField(firstKey)
+        if (errors.isNotEmpty()) {
+            AlertDialog.Builder(this)
+                .setTitle("Can't save yet")
+                .setMessage(errors.take(5).joinToString("\n") +
+                    if (errors.size > 5) "\n… and ${errors.size - 5} more." else "")
+                .setPositiveButton("Go to field") { _, _ ->
+                    selectTab(1)
+                    scrollToField(errors.first().substringBefore(":"))
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
             return
         }
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val editor = prefs.edit()
-        editor.putBoolean("setting_debug_log", debugLogging.isChecked)
-        editor.putBoolean("setting_hide_self", hideSelf.isChecked)
-        for ((key, box) in hookBoxes) editor.putBoolean(key, box.isChecked)
-        fieldKeys.forEach { editor.putString(it, values[it].orEmpty().trim()) }
 
-        val saved = editor.commit()
-        if (saved) {
-            markDirty(false)
-            pushHistory()
-            pushConfigToSystemProperties()
-            logToLogcat("Config saved via commit()")
-        } else {
-            logToLogcat("Config save failed via commit()")
-        }
+        val btn = stickySaveBtn
+        val originalText = btn?.text
+        btn?.isEnabled = false
+
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+        fieldKeys.forEach { prefs.putString(it, values[it]) }
+        prefs.putBoolean("setting_debug_log", debugLogging.isChecked)
+        prefs.putBoolean("setting_hide_self", hideSelf.isChecked)
+        hookBoxes.forEach { (k, sw) -> prefs.putBoolean(k, sw.isChecked) }
+        prefs.apply()
 
         try {
-            val dataDir = File(applicationInfo.dataDir)
-            val prefsDir = File(dataDir, "shared_prefs")
-            val prefsFile = File(prefsDir, "${PREFS_NAME}.xml")
-            if (prefsFile.exists()) {
-                prefsFile.setReadable(true, false)
-                prefsDir.setReadable(true, false)
-                prefsDir.setExecutable(true, false)
-                dataDir.setReadable(true, false)
-                dataDir.setExecutable(true, false)
-            }
-        } catch (e: Exception) {
-            logToLogcat("Permission fix failed: ${e.message}")
-        }
+            val dir = File(filesDir.parent, "shared_prefs")
+            dir.setReadable(true, false)
+            File(dir, "$PREFS_NAME.xml").setReadable(true, false)
+        } catch (_: Throwable) {}
 
-        // Brief confirmation animation on the save button
-        saveButton?.let { btn ->
-            val originalText = btn.text.toString()
-            btn.text = "✓ Saved!"
-            btn.background = rounded(Color.parseColor("#10B981"), 10)
-            btn.animate().scaleX(1.05f).scaleY(1.05f).setDuration(150)
-                .withEndAction {
-                    btn.animate().scaleX(1f).scaleY(1f).setDuration(150).start()
-                }.start()
-            btn.postDelayed({
-                btn.text = originalText
-                btn.background = rounded(Color.parseColor("#059669"), 10)
-            }, 1200)
+        pushHistory(values)
+
+        val pushed = pushConfigToSystemProperties()
+        if (pushed) {
+            markDirty(false)
+            savedValues.clear()
+            savedValues.putAll(values)
+            refreshAllDots()
+            toast("✓ Saved & pushed to props")
+            btn?.apply {
+                text = "✓ Saved!"
+                setTextColor(Color.WHITE)
+                background = Ui.rounded(this@MainActivity, Ui.SUCCESS, Ui.R_BUTTON)
+                postDelayed({
+                    text = originalText ?: "💾  Save"
+                    background = Ui.rounded(this@MainActivity, Ui.SUCCESS, Ui.R_BUTTON)
+                    isEnabled = true
+                    refreshDirtyIndicator()
+                }, 1200)
+            }
+        } else {
+            toast("⚠ Saved, but push failed — is su granted?")
+            btn?.apply {
+                text = "⚠ Push failed"
+                postDelayed({
+                    text = originalText ?: "💾  Save"
+                    isEnabled = true
+                    refreshDirtyIndicator()
+                }, 2000)
+            }
         }
+        refreshHistory()
     }
 
-    // ========== Soft Reboot ==========
+    // ========== Soft reboot ==========
 
     private fun hasRoot(): Boolean {
-        val su = Bridge.locateSu() ?: return false
         return try {
-            val p = Runtime.getRuntime().exec(arrayOf(su, "-c", "id"))
-            val out = p.inputStream.bufferedReader().readText()
-            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                p.destroyForcibly()
-                return false
-            }
-            out.contains("uid=0")
-        } catch (_: Exception) {
-            false
-        }
+            val p = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+            p.waitFor()
+            p.exitValue() == 0
+        } catch (_: Throwable) { false }
     }
 
     private fun softReboot() {
-        // Root probing shells out to su and can block on a grant prompt -- never
-        // do it on the main thread.
-        Toast.makeText(this, "Checking root access\u2026", Toast.LENGTH_SHORT).show()
-        Thread {
-            val su = Bridge.locateSu()
-            val granted = su != null && hasRoot()
-            runOnUiThread {
-                if (su == null) {
-                    Toast.makeText(this, "Root (su) not found \u2014 grant root to HexHydra in Magisk, then retry.", Toast.LENGTH_LONG).show()
-                    return@runOnUiThread
-                }
-                if (!granted) {
-                    Toast.makeText(this, "Root denied \u2014 open Magisk\u2192Superuser and allow HexHydra.", Toast.LENGTH_LONG).show()
-                    return@runOnUiThread
-                }
-                AlertDialog.Builder(this)
-                    .setTitle("Soft reboot?")
-                    .setMessage("This restarts the Android runtime (system_server). The screen will go black for ~15s. Save your work in other apps first.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Reboot") { _, _ -> doSoftReboot() }
-                    .show()
-            }
-        }.start()
+        AlertDialog.Builder(this)
+            .setTitle("Soft Reboot")
+            .setMessage("Restarts the Android runtime (system_server). " +
+                "The screen goes black for ~15 seconds.\n\n" +
+                "Required after enabling the module in LSPosed. Continue?")
+            .setPositiveButton("Reboot") { _, _ -> doSoftReboot() }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun doSoftReboot() {
+        if (!hasRoot()) {
+            toast("su not granted — root required for soft reboot")
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Rebooting")
+            .setMessage("Restarting Android runtime…\nThe screen will go black briefly.")
+            .setCancelable(false)
+            .show()
         Thread {
-            val su = Bridge.locateSu()
-            if (su == null) {
-                runOnUiThread { Toast.makeText(this, "Root (su) not found.", Toast.LENGTH_LONG).show() }
-                return@Thread
-            }
             try {
-                val process = Runtime.getRuntime().exec(arrayOf(su, "-c", "killall -9 system_server"))
-                val finished = process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)
-                val exit = if (finished) process.exitValue() else -1
-                val err = if (finished && exit != 0) process.errorStream.bufferedReader().readText().trim() else ""
-                runOnUiThread {
-                    if (!finished) {
-                        process.destroyForcibly()
-                        Toast.makeText(this, "Soft reboot timed out (su did not answer).", Toast.LENGTH_LONG).show()
-                    } else if (exit != 0) {
-                        Toast.makeText(this, "Soft reboot failed (exit $exit): $err", Toast.LENGTH_LONG).show()
-                    } else {
-                        Toast.makeText(this, "Soft reboot triggered \u2014 system will restart in ~15s.", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this, "Soft reboot failed: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            }
+                Thread.sleep(400)
+                Runtime.getRuntime().exec(arrayOf("su", "-c", "setprop ctl.restart zygote"))
+            } catch (_: Throwable) {}
         }.start()
     }
 
-    private fun buildTabBar(): View {
-        tabButtons.clear()
+
+    // ========== Dirty tracking + sticky bar ==========
+
+    private fun markDirty(v: Boolean) {
+        dirty = v
+        refreshDirtyIndicator()
+    }
+
+    private fun refreshDirtyIndicator() {
+        if (!::dirtyText.isInitialized) return
+        dirtyText.text = if (dirty) "Unsaved changes — press Save" else "All changes saved"
+        dirtyText.setTextColor(if (dirty) Ui.WARN else faintColor())
+        stickySaveBtn?.let { it.text = if (dirty) "💾  Save ●" else "💾  Save" }
+        updateStickyVisibility()
+    }
+
+    private fun updateStickyVisibility() {
+        stickyBar?.visibility =
+            if (selectedTab == 1 || dirty) View.VISIBLE else View.GONE
+    }
+
+    private fun buildStickyBar(): View {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(Ui.LG), dp(10), dp(Ui.LG), dp(10))
+            background = Ui.rounded(this@MainActivity, panelColor(), Ui.R_CARD)
+            elevation = dp(4).toFloat()
+        }
+        dirtyText = TextView(this).apply {
+            textSize = 12f
+            setTextColor(faintColor())
+        }
+        bar.addView(dirtyText, LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val rand = actionButton("🎲  Randomize", Ui.ACCENT) { randomizeAll() }
+        bar.addView(rand, LinearLayout.LayoutParams(dp(132), dp(42)).apply { rightMargin = dp(Ui.SM) })
+        val save = actionButton("💾  Save", Ui.SUCCESS) { saveConfig() }
+        bar.addView(save, LinearLayout.LayoutParams(dp(110), dp(42)))
+        stickySaveBtn = save
+        bar.visibility = View.GONE
+        return bar
+    }
+
+    // ========== Bottom navigation ==========
+
+    private fun buildBottomNav(): View {
+        navIcons.clear()
+        navLabels.clear()
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = rounded(cardAltColor(), 12)
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            tabTitles.forEachIndexed { i, title ->
-                val btn = TextView(this@MainActivity).apply {
-                    text = title
-                    textSize = 12f
-                    typeface = Typeface.MONOSPACE
+            setBackgroundColor(panelColor())
+            elevation = dp(Ui.SM).toFloat()
+            setPadding(dp(Ui.LG), dp(Ui.SM), dp(Ui.LG), dp(Ui.MD))
+            navData.forEachIndexed { i, (icon, label) ->
+                val item = LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
-                    setPadding(0, dp(10), 0, dp(10))
                     isClickable = true
                     isFocusable = true
-                    setOnClickListener { selectTab(i) }
+                    setOnClickListener {
+                        it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        selectTab(i)
+                    }
                 }
-                addView(btn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                tabButtons.add(btn)
+                val ic = TextView(this@MainActivity).apply {
+                    text = icon
+                    textSize = 18f
+                    gravity = Gravity.CENTER
+                    setPadding(dp(Ui.LG), dp(Ui.XS), dp(Ui.LG), dp(Ui.XS))
+                }
+                val lb = TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = 10f
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(2), 0, 0)
+                }
+                item.addView(ic)
+                item.addView(lb)
+                navIcons.add(ic)
+                navLabels.add(lb)
+                addView(item, LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             }
+        }
+    }
+
+    private fun refreshNav() {
+        navIcons.forEachIndexed { i, ic ->
+            val sel = i == selectedTab
+            ic.background = if (sel) Ui.rounded(
+                this, Ui.withAlpha(Ui.ACCENT, if (isDark()) 70 else 36), Ui.R_PILL
+            ) else null
+            navLabels[i].setTextColor(if (sel) Ui.ACCENT else faintColor())
+            navLabels[i].typeface = if (sel) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         }
     }
 
@@ -1243,177 +1431,174 @@ class MainActivity : Activity() {
         tabPages.forEachIndexed { idx, page ->
             page.visibility = if (idx == i) View.VISIBLE else View.GONE
         }
-        refreshTabs()
+        refreshNav()
+        updateStickyVisibility()
         if (::mainScroll.isInitialized) mainScroll.post { mainScroll.scrollTo(0, 0) }
     }
 
-    private fun refreshTabs() {
-        tabButtons.forEachIndexed { i, btn ->
-            if (i == selectedTab) {
-                btn.setTextColor(Color.WHITE)
-                btn.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
-                btn.background = rounded(Color.parseColor("#2563EB"), 8)
-            } else {
-                btn.setTextColor(textSecondary())
-                btn.typeface = Typeface.MONOSPACE
-                btn.background = null
-            }
-        }
-    }
-
-    // ========== Sticky bar / dirty state / badges ==========
-
-    private fun markDirty(d: Boolean) {
-        dirty = d
-        refreshDirtyIndicator()
-    }
-
-    private fun refreshDirtyIndicator() {
-        if (::dirtyText.isInitialized) {
-            dirtyText.text = if (dirty) "● Unsaved changes" else "✓ All saved"
-            dirtyText.setTextColor(if (dirty) Color.parseColor("#B45309") else faintColor())
-        }
-        // Save stays enabled even when clean: re-pressing re-pushes props
-        // (needed after a reboot wiped them). The dot carries the state.
-        stickySaveBtn?.let {
-            it.text = if (dirty) "💾  Save ●" else "💾  Save"
-        }
-    }
-
-    private fun buildStickyBar(): View {
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(panelColor())
-            elevation = dp(4).toFloat()
-            setPadding(dp(12), dp(8), dp(12), dp(12))
-
-            dirtyText = TextView(this@MainActivity).apply {
-                textSize = 12f
-                gravity = Gravity.CENTER
-                setPadding(0, 0, 0, dp(6))
-            }
-            addView(dirtyText, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT))
-
-            val row = LinearLayout(this@MainActivity).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            row.addView(actionButton("🎲  Randomize", Color.parseColor("#2563EB")) {
-                randomizeAll()
-            }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { rightMargin = dp(6) })
-            lateinit var save: Button
-            save = actionButton("💾  Save", Color.parseColor("#059669")) {
-                saveConfig(save)
-                Toast.makeText(this@MainActivity, "Saved – restart target apps.", Toast.LENGTH_SHORT).show()
-            }
-            row.addView(save, LinearLayout.LayoutParams(0, dp(50), 1f).apply { leftMargin = dp(6) })
-            stickySaveBtn = save
-            addView(row)
-            refreshDirtyIndicator()
-        }
-    }
+    // ========== Status dialog ==========
 
     private fun showStatusDialog() {
         val active = isModuleActive()
+        val refreshed = readRefreshed()
+        val timeStr = if (refreshed > 0)
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(refreshed))
+        else "never"
+
         AlertDialog.Builder(this)
-            .setTitle(if (active) "Module active" else "Module inactive")
-            .setMessage(if (active)
-                "Spoofing is running. After pressing Save, restart the target apps to apply the new identity."
-            else
-                "The module is not loaded. To activate:\n\n1. Open LSPosed → Modules → enable HexHydra\n2. Tick your target apps in scope\n3. Press Soft Reboot below (or reboot)\n4. Reopen this app — the badge turns green.")
+            .setTitle(if (active) "✓ Module Active" else "✗ Module Inactive")
+            .setMessage(
+                if (active) {
+                    "The Xposed module is loaded and spoofing.\n\n" +
+                        "Last config refresh: $timeStr\n\n" +
+                        "To change the spoofed identity, edit fields in the Fields tab and press Save."
+                } else {
+                    "The module is not currently loaded in any process.\n\n" +
+                        "To activate:\n" +
+                        "1. Open LSPosed → Modules → HexHydra\n" +
+                        "2. Enable the module and scope target apps\n" +
+                        "3. Press Soft Reboot on the Home tab (or reboot)\n\n" +
+                        "Last config refresh: $timeStr"
+                }
+            )
             .setPositiveButton("OK", null)
             .show()
     }
 
-    private fun groupErrorCount(group: FieldGroup): Int =
-        group.keys.count { validateField(it, values[it].orEmpty()) != null }
 
-    private fun styleGroupBadge(badge: TextView, group: FieldGroup) {
-        val errors = groupErrorCount(group)
-        badge.text = if (errors > 0) "⚠ ${group.keys.size}" else "${group.keys.size}"
-        badge.setTextColor(if (errors > 0) Color.parseColor("#991B1B") else textHint())
-        badge.background = rounded(if (errors > 0) Color.parseColor("#FECACA") else dividerColor(), 999)
+    // ========== Group badges ==========
+
+    private fun groupErrorCount(index: Int): Int {
+        val g = groups.getOrNull(index) ?: return 0
+        return g.keys.count { k ->
+            val raw = values[k].orEmpty()
+            raw.isNotBlank() && validateField(k, raw) != null
+        }
+    }
+
+    private fun styleGroupBadge(badge: TextView, count: Int) {
+        if (count <= 0) {
+            badge.visibility = View.GONE
+        } else {
+            badge.text = "$count"
+            badge.visibility = View.VISIBLE
+            badge.setTextColor(Ui.badText(this))
+            badge.background = Ui.rounded(this, Ui.badBg(this), Ui.R_PILL)
+        }
     }
 
     private fun refreshGroupBadgeForKey(key: String) {
         val idx = keyToGroupIndex[key] ?: return
-        groupBadges[idx]?.let { styleGroupBadge(it, groups[idx]) }
+        val badge = groupBadges[idx] ?: return
+        styleGroupBadge(badge, groupErrorCount(idx))
     }
 
-    private fun scrollToField(key: String) {
-        val target = inputs[key] ?: return
+    // ========== Scroll to a named field (used by validation gating) ==========
+
+    private fun scrollToField(label: String) {
         if (!::mainScroll.isInitialized) return
-        mainScroll.post {
-            var y = 0
-            var v: View? = target
-            while (v != null && v != mainScroll) {
-                y += v.top
-                v = v.parent as? View
+        val idx = fieldLabels.entries.indexOfFirst { it.value == label }
+        if (idx < 0) return
+        val groupIdx = keyToGroupIndex[fieldLabels.keys.elementAt(idx)] ?: 0
+        if (!expandedGroups.contains(groupIdx)) {
+            expandedGroups.add(groupIdx)
+            refreshAccordion()
+        }
+        mainScroll.postDelayed({
+            val v = mainScroll.findViewWithTag<View>("field_${fieldLabels.keys.elementAt(idx)}")
+            v?.requestFocus()
+        }, 150)
+    }
+
+    // ========== Buttons, press feedback, small helpers ==========
+
+    /** Press-in scale animation (micro-polish). */
+    private fun View.pressEffect() {
+        setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN ->
+                    v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(90).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
             }
-            mainScroll.smoothScrollTo(0, (y - dp(80)).coerceAtLeast(0))
+            false
         }
     }
 
-    // ========== Helpers ==========
-
-    private fun panel(): LinearLayout {
-        return LinearLayout(this).apply {
-            setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = rounded(panelColor(), 14)
-            elevation = dp(1).toFloat()
-        }
-    }
-
-    private fun sectionTitle(text: String): TextView {
-        return TextView(this).apply {
-            this.text = text.uppercase()
-            textSize = 13f
-            typeface = Typeface.DEFAULT_BOLD
-            letterSpacing = 0.1f
-            setTextColor(textPrimary())
-            setPadding(0, 0, 0, dp(12))
-        }
-    }
-
-    private fun actionButton(label: String, color: Int, onClick: () -> Unit): Button {
-        return Button(this).apply {
+    /** Filled accent button with press animation + haptic. */
+    private fun primaryButton(label: String, onClick: () -> Unit): Button =
+        Button(this).apply {
             text = label
-            textSize = 14f
+            textSize = Ui.T_BODY
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE)
-            setAllCaps(false)
-            background = rounded(color, 10)
-            setOnClickListener { onClick() }
-        }
-    }
-
-    private fun divider(): View {
-        return View(this).apply {
-            background = GradientDrawable().apply { setColor(dividerColor()) }
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
-                topMargin = dp(6)
-                bottomMargin = dp(6)
+            isAllCaps = false
+            background = Ui.rounded(this@MainActivity, Ui.ACCENT, Ui.R_BUTTON)
+            stateListAnimator = null
+            minHeight = 0
+            minimumHeight = 0
+            pressEffect()
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                onClick()
             }
         }
-    }
 
-    private fun rounded(color: Int, radiusDp: Int): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = dp(radiusDp).toFloat()
+    /** Outlined button (e.g. Soft Reboot, Export/Import) with haptic. */
+    private fun outlineButton(label: String, color: Int, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = Ui.T_BODY
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color)
+            isAllCaps = false
+            background = Ui.outlined(this@MainActivity, color, Ui.R_BUTTON)
+            stateListAnimator = null
+            minHeight = 0
+            minimumHeight = 0
+            pressEffect()
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                onClick()
+            }
         }
-    }
 
-    private fun spacer(heightDp: Int): View {
-        return View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(heightDp))
+    /** Solid button in any color (sticky bar, history Restore). */
+    private fun actionButton(label: String, color: Int, onClick: () -> Unit): Button =
+        Button(this).apply {
+            text = label
+            textSize = Ui.T_BODY
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            isAllCaps = false
+            background = Ui.rounded(this@MainActivity, color, Ui.R_BUTTON)
+            stateListAnimator = null
+            minHeight = 0
+            minimumHeight = 0
+            pressEffect()
+            setOnClickListener {
+                it.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                onClick()
+            }
         }
+
+    // ---- small delegates so layout code reads consistently ----
+    private fun panel() = Ui.cardView(this)
+    private fun divider() = Ui.dividerView(this)
+    private fun rounded(color: Int, radiusDp: Int) = Ui.rounded(this, color, radiusDp)
+    private fun spacer(heightDp: Int) = Ui.spacer(this, heightDp)
+    private fun dp(v: Int) = Ui.dp(this, v)
+
+    private fun toast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
+    /** Visible under `adb logcat -s HexHydra` when debug logging is on. */
     private fun logToLogcat(msg: String) {
-        android.util.Log.d("HexHydra", msg)
+        if (getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean("setting_debug_log", false)) {
+            android.util.Log.i("HexHydra", msg)
+        }
     }
 }
+

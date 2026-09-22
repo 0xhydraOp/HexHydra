@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.9.8 (2026-09-23)
+- **UI redesign** — hook, bridge, prefs-schema and randomize logic untouched.
+- New `Ui.kt` design system: shared color palette (teal accent), spacing/radius/type tokens, card/section/caption/divider factories.
+- Bottom navigation bar (Home / Fields / Settings) with accent-pill active state replaces the text tab strip.
+- Home tab: prominent status card (dot + Active/Inactive + hint, tap for activation checklist), Quick Actions card (Randomize All primary + Soft Reboot), Profile History capped to last 3 with "View all".
+- Fields tab: per-group 🎲 randomize in accordion headers, per-field dirty dot (●) when a value differs from the last save.
+- Settings tab: title+subtitle Switch rows grouped into Module Options / Hook Toggles cards, Data Transfer card (Export/Import), Danger Zone card (Soft Reboot), version footer.
+- Micro-polish: button press-scale animation, haptic feedback, sticky Save bar auto-appears wherever unsaved changes exist.
+- First release signed with the new release keystore (RSA-4096, SHA384withRSA).
+- VersionCode: 73
+
 ## v3.9.7 (2026-09-23)
 - **Stability: scoped apps must not crash.** All spoof-hook callbacks now run
   through `SafeHook`, which swallows any `Throwable` so a spoofing edge case
