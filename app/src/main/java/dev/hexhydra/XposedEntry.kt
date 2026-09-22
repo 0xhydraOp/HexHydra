@@ -432,6 +432,7 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             "mac_address", "mac_bssid", "mac_ssid", "bluetooth_mac", "ip_address",
             "latitude", "longitude", "locale", "timezone",
             "screen_width", "screen_height", "screen_density", "user_agent",
+            "user_agent2", "user_agent3",
             "gl_renderer", "gl_vendor", "battery_level", "battery_scale",
             "setting_debug_log", "setting_hide_self",
             "hook_device", "hook_telephony", "hook_network", "hook_location",
@@ -470,19 +471,17 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
 
         // Try writing to SystemProperties via setprop (su -c) as cross-process bridge.
         // Direct SystemProperties.set() is blocked on Android 15, but setprop via root works.
+        // Script building is centralized in Bridge so every writer (UI save,
+        // boot, zygote) applies the same escaping and long-value chunking.
         try {
-            val sb = StringBuilder()
+            val filtered = HashMap<String, String>()
             for ((key, value) in cachedValues) {
-                if (value.isNotEmpty() && key in KNOWN_KEYS) {
-                    // Escape single quotes for the su -c shell layer (e.g. device_name "O'Brien").
-                    sb.append("setprop hexhydra.$key '${value.replace("'", "'\\''")}'")
-                    sb.append(";")
-                }
+                if (value.isNotEmpty() && key in KNOWN_KEYS) filtered[key] = value
             }
-            sb.append("setprop hexhydra.refreshed '${System.currentTimeMillis()}'")
+            val script = Bridge.buildPushScript(filtered)
             val su = Bridge.locateSu()
             if (su != null) {
-                val process = Runtime.getRuntime().exec(arrayOf(su, "-c", sb.toString()))
+                val process = Runtime.getRuntime().exec(arrayOf(su, "-c", script))
                 process.waitFor()
                 if (process.exitValue() == 0) {
                     lastSysPropRefresh = System.currentTimeMillis()
@@ -525,13 +524,14 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
             val spClass = Class.forName("android.os.SystemProperties")
             val setMethod = spClass.getDeclaredMethod("set", String::class.java, String::class.java)
             var count = 0
-            for ((key, value) in cachedValues) {
-                if (value.isNotEmpty() && key in KNOWN_KEYS) {
-                    try {
-                        setMethod.invoke(null, "hexhydra.$key", value)
-                        count++
-                    } catch (e: Throwable) {}
-                }
+            // Same chunking as the su path: direct set() also rejects values
+            // over ~91 bytes, so long values go out as key/key2/key3 chunks.
+            for ((key, value) in Bridge.expandForProps(cachedValues)) {
+                if (key !in KNOWN_KEYS) continue
+                try {
+                    setMethod.invoke(null, "hexhydra.$key", value)
+                    count++
+                } catch (e: Throwable) {}
             }
             setMethod.invoke(null, "hexhydra.refreshed", System.currentTimeMillis().toString())
             XposedBridge.log("HexHydra: SystemProperties written ($count values)")
@@ -557,6 +557,9 @@ class XposedEntry : IXposedHookLoadPackage, IXposedHookZygoteInit {
                 }
             }
             if (count > 0) {
+                // Rejoin chunked long values (user_agent exceeds PROP_VALUE_MAX).
+                val uaFull = Bridge.reassembleSplitValue(cachedValues, "user_agent")
+                if (uaFull.isNotEmpty()) cachedValues["user_agent"] = uaFull
                 dataFetched = true
                 debugEnabled = cachedValues["setting_debug_log"] == "true"
                 XposedBridge.log("HexHydra: Read $count values from SystemProperties")

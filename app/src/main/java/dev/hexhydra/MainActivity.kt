@@ -922,8 +922,13 @@ class MainActivity : Activity() {
         try {
             val hooks = HashMap<String, Boolean>()
             for ((key, box) in hookBoxes) hooks[key] = box.isChecked
-            Bridge.pushToSystemProperties(Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks))
-            logToLogcat("Bridge props pushed")
+            val ok = Bridge.pushToSystemProperties(Bridge.buildPropMap(values, debugLogging.isChecked, hideSelf.isChecked, hooks))
+            if (ok) {
+                logToLogcat("Bridge props pushed")
+            } else {
+                logToLogcat("Bridge push failed (no su or setprop error)")
+                Toast.makeText(this, "Saved locally – root prop push failed; scoped apps keep old values until you retry.", Toast.LENGTH_LONG).show()
+            }
         } catch (e: Exception) {
             logToLogcat("Bridge push failed: ${e.message}")
         }

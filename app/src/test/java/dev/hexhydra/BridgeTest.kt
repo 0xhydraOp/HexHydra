@@ -133,10 +133,41 @@ class BridgeTest {
             val parsed = parseShellLiterals(script)
             for ((key, value) in data) {
                 if (value.isNotBlank()) {
-                    assertTrue("$key not round-tripped", parsed.contains("hexhydra.$key $value"))
+                    if (key == "user_agent") {
+                        // Chunked across user_agent/user_agent2 (see
+                        // longUserAgentIsSplitAndReassembles for the full check).
+                        assertTrue("UA chunks missing", parsed.contains("hexhydra.user_agent2 "))
+                    } else {
+                        assertTrue("$key not round-tripped", parsed.contains("hexhydra.$key $value"))
+                    }
                 }
             }
         }
+    }
+
+    @Test
+    fun longUserAgentIsSplitAndReassembles() {
+        val ua = FakeData.generateAll().getValue("user_agent")
+        assertTrue("test needs a UA over the chunk size, got ${ua.length}", ua.length > Bridge.PROP_CHUNK_SIZE)
+        val expanded = Bridge.expandForProps(mapOf("user_agent" to ua, "model" to "Pixel 8"))
+        assertEquals("Pixel 8", expanded["model"])
+        for ((k, v) in expanded) {
+            if (k.startsWith("user_agent")) assertTrue("$k too long: ${v.length}", v.length <= Bridge.PROP_CHUNK_SIZE)
+        }
+        assertTrue(expanded.getValue("user_agent2").isNotEmpty())
+        assertEquals(ua, Bridge.reassembleSplitValue(expanded, "user_agent"))
+        // The script carries the chunks and still writes the timestamp last.
+        val script = Bridge.buildPushScript(mapOf("user_agent" to ua), timestamp = 1L)
+        assertTrue(script.contains("hexhydra.user_agent2"))
+        assertTrue(script.endsWith("setprop hexhydra.refreshed '1'"))
+    }
+
+    @Test
+    fun shortValuesAreNotSplit() {
+        val expanded = Bridge.expandForProps(mapOf("model" to "Pixel 8", "imei" to ""))
+        assertEquals(mapOf("model" to "Pixel 8"), expanded)
+        assertEquals("", Bridge.reassembleSplitValue(emptyMap(), "user_agent"))
+        assertEquals("", Bridge.reassembleSplitValue(mapOf("user_agent" to ""), "user_agent"))
     }
 
     /**

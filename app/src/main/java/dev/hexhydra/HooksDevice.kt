@@ -109,21 +109,23 @@ internal fun XposedEntry.hookSystemProperties(classLoader: ClassLoader) {
 }
 
 internal fun XposedEntry.hookUserAgent(classLoader: ClassLoader) {
+        // Read live per call, never snapshot: the UA may arrive after hook
+        // install (props bridge), and an empty-at-install snapshot used to
+        // skip installing these hooks entirely — silently leaking the real UA.
         try {
-            val ua = getValue("user_agent")
-            if (ua.isEmpty()) return
             hookMethodRet("android.webkit.WebSettings", classLoader, "getDefaultUserAgent", "user_agent", Context::class.java)
-            
-            try {
-                XposedHelpers.findAndHookMethod("android.webkit.WebView", classLoader, "loadUrl", String::class.java, object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            val settings = XposedHelpers.callMethod(param.thisObject, "getSettings")
-                            XposedHelpers.callMethod(settings, "setUserAgentString", ua)
-                        } catch (e: Throwable) {}
-                    }
-                })
-            } catch (e: Throwable) {}
+        } catch (_: Throwable) {}
+        try {
+            XposedHelpers.findAndHookMethod("android.webkit.WebView", classLoader, "loadUrl", String::class.java, object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        val ua = getValue("user_agent")
+                        if (ua.isEmpty()) return
+                        val settings = XposedHelpers.callMethod(param.thisObject, "getSettings")
+                        XposedHelpers.callMethod(settings, "setUserAgentString", ua)
+                    } catch (e: Throwable) {}
+                }
+            })
         } catch (e: Throwable) {}
     }
 

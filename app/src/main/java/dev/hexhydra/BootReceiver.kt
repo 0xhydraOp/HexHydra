@@ -23,7 +23,10 @@ class BootReceiver : BroadcastReceiver() {
                     is Boolean -> map[key] = value.toString()
                 }
             }
-            if (map.isNotEmpty()) Bridge.pushToSystemProperties(map)
+            if (map.isNotEmpty()) {
+                val ok = Bridge.pushToSystemProperties(map)
+                android.util.Log.d("HexHydra", if (ok) "Boot props pushed" else "Boot prop push failed (no su or setprop error)")
+            }
         } catch (_: Throwable) {}
     }
 }

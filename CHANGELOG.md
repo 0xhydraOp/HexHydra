@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.9.4 (2026-09-22)
+- **Fix: long values (notably `user_agent`) now survive the prop bridge.**
+  Android caps a property value at ~91 bytes; the generated UA (~137 chars)
+  made `setprop hexhydra.user_agent` fail silently, and `hookUserAgent` then
+  skipped installing (empty at install) — UA spoofing was dead end-to-end on
+  ROMs without working XSharedPreferences. `Bridge.expandForProps()` splits
+  long values into `key`/`key2`/`key3` chunks (80 chars) and
+  `Bridge.reassembleSplitValue()` rejoins them on the module side
+  (`user_agent2`/`user_agent3` added to `KNOWN_KEYS`); the zygote writer now
+  reuses `Bridge.buildPushScript` so all writers agree.
+- **Fix: UA hook reads live.** `hookUserAgent` no longer snapshots the UA at
+  install and bails when empty; the `WebView.loadUrl` override reads
+  `getValue("user_agent")` per call (`getDefaultUserAgent` was already live).
+- **Fix: silent push failures surface.** `Bridge.pushToSystemProperties()`
+  returns success (`su` found + `setprop` exit 0); Save toasts a warning when
+  the push fails and `BootReceiver` logs it.
+- **Tests:** new UA split/reassemble round-trip tests; generated-profile
+  round-trip updated for chunked UA. All unit tests pass; debug APK builds.
+- VersionCode: 69
+
 ## v3.9.3 (2026-09-22)
 - **Fix: bare `su` in the cross-process bridge.** `Bridge.pushToSystemProperties()`
   and `XposedEntry.writeSharedFile()` invoked `su` by bare name and relied on

@@ -40,6 +40,44 @@ object Bridge {
     }
 
     /**
+     * Android caps a system-property value at ~91 bytes (PROP_VALUE_MAX), but
+     * generated values like `user_agent` (~137 chars) exceed it, so a single
+     * `setprop` for them always fails. Long values are split into 80-char
+     * chunks (`key`, `key2`, `key3`) that the module reassembles; chunking the
+     * raw value BEFORE shell-escaping keeps every chunk safely under the cap.
+     */
+    const val PROP_CHUNK_SIZE = 80
+    private val SPLIT_KEYS = setOf("user_agent")
+    private const val MAX_CHUNKS = 3
+
+    /** Expand splittable long values into chunked entries. Pure, unit-tested. */
+    fun expandForProps(values: Map<String, String>): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        for ((key, value) in values) {
+            if (value.isEmpty()) continue
+            if (key in SPLIT_KEYS && value.length > PROP_CHUNK_SIZE) {
+                out[key] = value.substring(0, PROP_CHUNK_SIZE)
+                var rest = value.substring(PROP_CHUNK_SIZE)
+                var i = 2
+                while (rest.isNotEmpty() && i <= MAX_CHUNKS) {
+                    out["$key$i"] = rest.take(PROP_CHUNK_SIZE)
+                    rest = rest.drop(PROP_CHUNK_SIZE)
+                    i++
+                }
+            } else {
+                out[key] = value
+            }
+        }
+        return out
+    }
+
+    /** Rejoin chunked entries (`key` + `key2` + `key3`). Pure, unit-tested. */
+    fun reassembleSplitValue(values: Map<String, String>, key: String): String {
+        val first = values[key]?.takeIf { it.isNotEmpty() } ?: return ""
+        return first + values[key + "2"].orEmpty() + values[key + "3"].orEmpty()
+    }
+
+    /**
      * Build the single `su -c` script that sets each non-empty value.
      * Blank values are skipped (the hook layer falls back to generated data).
      * The refresh timestamp is written last so the module's poller always sees
@@ -47,8 +85,7 @@ object Bridge {
      */
     fun buildPushScript(values: Map<String, String>, timestamp: Long = System.currentTimeMillis()): String {
         val sb = StringBuilder()
-        for ((key, value) in values) {
-            if (value.isEmpty()) continue
+        for ((key, value) in expandForProps(values)) {
             sb.append("setprop hexhydra.").append(key)
                 .append(" '").append(value.replace("'", "'\\''")).append("';")
         }
@@ -76,12 +113,20 @@ object Bridge {
         } catch (_: Exception) { null }
     }
 
-    /** Push the given key/value map to `hexhydra.*` system properties via an absolute-path `su`. */
-    fun pushToSystemProperties(values: Map<String, String>) {
-        val su = locateSu() ?: return
-        try {
+    /**
+     * Push the given key/value map to `hexhydra.*` system properties via an
+     * absolute-path `su`. Returns true only when `su` was found and the
+     * `setprop` script exited 0, so callers can surface failures instead of
+     * silently doing nothing.
+     */
+    fun pushToSystemProperties(values: Map<String, String>): Boolean {
+        val su = locateSu() ?: return false
+        return try {
             val process = Runtime.getRuntime().exec(arrayOf(su, "-c", buildPushScript(values)))
             process.waitFor()
-        } catch (_: Throwable) {}
+            process.exitValue() == 0
+        } catch (_: Throwable) {
+            false
+        }
     }
 }
